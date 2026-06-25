@@ -12,6 +12,7 @@ export default function RunButtons({
   onRun, 
   onSubmit, 
   isRunning, 
+  isEvaluating,
   isSubmitting, 
   activeFile, 
   showTerminal,
@@ -68,18 +69,17 @@ export default function RunButtons({
         {/* Evaluate button */}
         <button
           onClick={onEvaluate}
+          disabled={isRunning || isEvaluating || isSubmitting}
           className={`
             flex items-center space-x-2 px-4 py-2 rounded-xl font-semibold text-sm transition-all duration-300 shadow-lg
-            ${isSubmitting
+            ${isEvaluating || isSubmitting
               ? 'bg-gradient-to-r from-gray-400 to-gray-500 text-white cursor-not-allowed'
-              : !activeFile
-              ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
               : 'bg-gradient-to-r from-yellow-500 to-orange-600 text-white hover:from-yellow-600 hover:to-orange-700 hover:shadow-xl hover:scale-105 active:scale-95'
             }
           `}
-          title="Evaluate Code"
+          title="Run communication evaluation"
         >
-          <span>Evaluate</span>
+          {isEvaluating ? <span>Evaluating…</span> : <span>Evaluate</span>}
         </button>
 
         {/* Submit button */}

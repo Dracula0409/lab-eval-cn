@@ -6,14 +6,16 @@ import submissionRoute from './submission.js';
 import filesRoute from './file.js';
 import moduleRoutes from './modules.js';
 import sessionsRoute from './sessions.js';
+import evaluationRoute from './evaluation.js';
 import coursesRoute from './courses.js';
-import { saveFileToContainer, runAndEvaluate } from '../controllers/sshController.js';
+import { saveFileToContainer } from '../controllers/sshController.js';
 
 const router = Router();
 
 router.use('/ping', pingRoute);
 router.use('/questions', questionsRoute);
 router.use('/submission', submissionRoute);
+router.use('/evaluation', evaluationRoute);
 router.use('/file',filesRoute);
 router.use('/modules', moduleRoutes);
 router.use('/sessions', sessionsRoute);
@@ -75,39 +77,6 @@ router.post('/rename-file', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('[API] rename-file error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Run code and evaluate protocol/test cases
-router.post('/run-evaluate', async (req, res) => {
-  try {
-    const { 
-      userId = 'testuser123', 
-      filename, 
-      code, 
-      language, 
-      evaluationScript = 'server_evaluator.py', 
-      testCases = [],
-      clientCount = 1,
-      clientDelay = 0.5,
-    } = req.body;
-    if (!filename || !code || !language) {
-      return res.status(400).json({ error: 'Missing required fields (filename, code, language)' });
-    }
-    const result = await runAndEvaluate({ 
-      userId, 
-      filename, 
-      code, 
-      language, 
-      evaluationScript, 
-      testCases,
-      clientCount,
-      clientDelay,
-    });
-    res.json({ success: true, ...result });
-  } catch (err) {
-    console.error('[API] run-evaluate error:', err);
     res.status(500).json({ error: err.message });
   }
 });

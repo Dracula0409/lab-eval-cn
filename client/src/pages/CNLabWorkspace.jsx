@@ -46,7 +46,8 @@ const MobileTabs = ({ activeTab, setActiveTab, tabs }) => (
 
 
 // Helper functions
-const getCurrentUser = () => 'testuser123'; // replace with jwt
+const getCurrentUser = () => localStorage.getItem('studentId') || 'testuser123';
+const getStudentName = () => localStorage.getItem('studentName') || getCurrentUser();
 const getCurrentDateTime = () => {
   const now = new Date();
   return now.toISOString().slice(0, 19).replace('T', ' ');
@@ -72,6 +73,7 @@ export default function CNLabWorkspace() {
   const [showFileModal, setShowFileModal] = useState(false);
   const [availableFiles, setAvailableFiles] = useState([]);
   const [isRunning, setIsRunning] = useState(false);
+  const [isEvaluating, setIsEvaluating] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [testCaseResults, setTestCaseResults] = useState([]);
   const panelRef = useRef(null);
@@ -129,13 +131,12 @@ export default function CNLabWorkspace() {
               id: q._id,
               title: q.title,
               description: q.description,
-              precode: q.precode || {},
-              clientPrecode: q.clientPrecode || {},
-              solution: q.solution || {},
-              clientSolution: q.clientSolution || {},
-              clientCount: q.clientCount || 1,
-              clientDelay: q.clientDelay || 0.5,
-              testCases: q.testCases || { server: [], client: [] }
+              questionKey: q.questionKey || 'q1',
+              files: q.files || [],
+              testcases: q.testcases || {},
+              input: q.input || '',
+              evalScript: q.evalScript || '',
+              maxMarks: q.maxMarks,
             }));
             
             setQuestions(formattedQuestions);
@@ -230,32 +231,9 @@ export default function CNLabWorkspace() {
   }, []);
 
 
-  //tags for diff server and client codes
   function getTagsFromQuestion(question) {
-    if (!question) return [];
-
-    const tags = [];
-
-    const serverCount = Object.keys(question.precode || {}).length;
-    const clientCount = Object.keys(question.clientPrecode || {}).length;
-
-    if (serverCount === 1) {
-      tags.push('server');
-    } else {
-      for (let i = 1; i <= serverCount; i++) {
-        tags.push(`server${i}`);
-      }
-    }
-
-    if (clientCount === 1) {
-      tags.push('client');
-    } else {
-      for (let i = 1; i <= clientCount; i++) {
-        tags.push(`client${i}`);
-      }
-    }
-
-    return tags;
+    if (!question?.files?.length) return [];
+    return question.files.map(f => f.tag).filter(Boolean);
   }
   const tags = useMemo(() => {
   if (
@@ -282,79 +260,54 @@ export default function CNLabWorkspace() {
   }, []);
 
 
-  // setting test case results
   useEffect(() => {
     const onEval = (e) => {
-      const { results } = e.detail || {};
-      const currentQuestion = questions[activeQuestionIdx];
-      const questionId = currentQuestion?.id;
-
+      const { results, questionId } = e.detail || {};
       if (!questionId || !results) return;
 
-      const currentTestCases = currentQuestion?.testCases || [];
-      
-      // merge each result into corresponding test case
-      const processedResults = currentTestCases.map((tc, idx) => {
-        const result = results && results[idx] ? results[idx] : {};
-        return {
-          ...tc,
-          actualOutput: (result.stdout || '') + (result.stderr ? `\n${result.stderr}` : ''),
-          status: result.exitCode === 0 ? 'PASS' : 'FAIL',
-          exitCode: result.exitCode
-        };
-      });
-
-      // store results by question id
       setTestCaseResults(prev => ({
         ...prev,
-        [questionId]: processedResults
+        [questionId]: results,
       }));
     };
-    
+
     window.addEventListener('evaluation-complete', onEval);
     return () => window.removeEventListener('evaluation-complete', onEval);
-  }, [questions, activeQuestionIdx]);
+  }, []);
 
 
-  // When questions or activeQuestionIdx changes, set files from solution
   useEffect(() => {
-    if (questions && questions.length > 0 && questions[activeQuestionIdx]) {
+    if (questions?.length > 0 && questions[activeQuestionIdx]) {
       const activeQuestion = questions[activeQuestionIdx];
-      
-      // During development, use solution code instead of precode
-      // In production, you would use precode instead:
-      // const fileMap = { ...activeQuestion.precode, ...(activeQuestion.clientPrecode || {}) };
-      
-      // Use solution code for both server and client files during development
-      const fileMap = { 
-        ...(activeQuestion.solution || {}),
-        ...(activeQuestion.clientSolution || {})
-      };
-      
-      // Convert file map to files array
-      const filesFromSolution = Object.entries(fileMap).map(([filename, code]) => {
+
+      const filesFromQuestion = (activeQuestion.files || []).map(f => {
         let lang = 'plaintext';
-        if (filename.endsWith('.py')) lang = 'python';
-        else if (filename.endsWith('.c')) lang = 'c';
-        else if (filename.endsWith('.js')) lang = 'javascript';
-        else if (filename.endsWith('.html')) lang = 'html';
-        else if (filename.endsWith('.css')) lang = 'css';
-        
+        if (f.name?.endsWith('.py')) lang = 'python';
+        else if (f.name?.endsWith('.c')) lang = 'c';
+        else if (f.name?.endsWith('.js')) lang = 'javascript';
+
         return {
-          id: filename.replace(/\.[^/.]+$/, ''),
-          name: filename.split('/').pop(), // just the filename
-          path: `${currentWorkingDir}/${filename}`, // full relative path
+          id: f.tag || f.name.replace(/\.[^/.]+$/, ''),
+          name: f.name,
+          tag: f.tag,
+          path: `${currentWorkingDir}/${f.name}`,
           language: lang,
-          code: code
+          code: f.precode || '',
         };
       });
-      
-      setFiles(filesFromSolution);
-      if (filesFromSolution.length > 0) {
-        setActiveFileId(filesFromSolution[0].id);
+
+      setFiles(filesFromQuestion);
+      if (filesFromQuestion.length > 0) {
+        setActiveFileId(filesFromQuestion[0].id);
       }
+
+      const autoMap = {};
+      filesFromQuestion.forEach(f => {
+        if (f.tag) autoMap[f.tag] = f.path;
+      });
+      setTagToFileMap(autoMap);
     }
-  }, [questions, activeQuestionIdx]);
+  }, [questions, activeQuestionIdx, currentWorkingDir]);
 
 
   // Handle file operations
@@ -625,78 +578,61 @@ export default function CNLabWorkspace() {
     }
   };
 
-  const activeFile = files.find(f => f.id === activeFileId) || files[0];  
+  const activeFile = files.find(f => f.id === activeFileId) || files[0];
+
   const handleEvaluate = async () => {
-    try {
-      if (!questions.length || !activeFile) return;      const currentQuestion = questions[activeQuestionIdx] || {};
-      
-      // Determine code type (server or client) based on filename
-      const isClient = activeFile.name.toLowerCase().includes('client');
-      const codeType = isClient ? 'client' : 'server';
-      
-      // Choose the appropriate evaluation script and test cases
-      const evaluationScript = isClient ? 'client_evaluator.py' : (currentQuestion.evaluationScript || 'server_evaluator.py');
-      
-      const testCases = currentQuestion.testCases?.[codeType] || [];
-      
-      const clientCount = currentQuestion.clientCount || 1;
-      const clientDelay = currentQuestion.clientDelay || 0.5;
+    const currentQuestion = questions[activeQuestionIdx];
+    if (!currentQuestion) return;
 
-      console.log(`EVALUATE: Sending ${codeType} evaluation request:`, { 
-        evaluationScript, testCases, clientCount, clientDelay, codeType 
-      });
-
-      const response = await axios.post('http://localhost:5001/api/run-evaluate', {
-        filename: activeFile.name,
-        code: activeFile.code,
-        language: activeFile.language,
-        evaluationScript,
-        testCases,
-        clientCount,
-        clientDelay,
-        codeType
-      });
-      
-      // Process test results
-      const updatedTestCases = [];
-      if (response.data && response.data.results) {
-        // Map each test result to include all relevant information
-        response.data.results.forEach((result, idx) => {
-          const originalTest = testCases[idx] || {};
-          const resultParts = (result.stdout || '').split(':');
-          const status = resultParts.length > 1 ? resultParts[1] : 'FAIL';
-          const message = resultParts.length > 2 ? resultParts.slice(2).join(':') : result.stderr || 'Evaluation failed';
-          
-          updatedTestCases.push({
-            ...originalTest,  // Keep original test case properties
-            id: idx,          // Add an id for tracking
-            description: originalTest.description || `Test ${idx + 1}`,
-            points: originalTest.points || 0,
-            status: status,
-            actualOutput: message,
-            stderr: result.stderr || ''
-          });
-        });
-        
-        // Update test case results in the relevant question
-        const updatedQuestions = [...questions];
-        updatedQuestions[activeQuestionIdx] = {
-          ...currentQuestion,
-          [`testCaseResults_${codeType}`]: updatedTestCases
-        };
-        setQuestions(updatedQuestions);
-      }
-      
-      window.dispatchEvent(new CustomEvent('evaluation-complete', { 
-        detail: {
-          ...response.data,
-          testCaseResults: updatedTestCases
-        }
-      }));
-    } catch (err) {
-      console.error('Evaluate error', err);
+    if (Object.keys(tagToFileMap).length !== tags.length) {
+      alert('Please assign a file for every tag before running evaluation.');
+      return;
     }
-  }
+
+    setIsEvaluating(true);
+
+    try {
+      const requiredPaths = Object.values(tagToFileMap);
+      const filteredFiles = files.filter(f => requiredPaths.includes(f.path));
+
+      for (const file of filteredFiles) {
+        await axios.post('http://localhost:5001/api/save-file', {
+          filename: file.name,
+          filePath: file.path,
+          code: file.code,
+        });
+      }
+
+      const tagPaths = { ...tagToFileMap };
+      const sourceFiles = Object.fromEntries(filteredFiles.map(f => [f.name, f.code]));
+
+      const response = await axios.post('http://localhost:5001/api/evaluation/run', {
+        userId: getCurrentUser(),
+        studentName: getStudentName(),
+        sessionId: getCurrentLabSession(),
+        moduleId: moduleInfo?._id,
+        questionId: currentQuestion.id,
+        tagPaths,
+        sourceFiles,
+      });
+
+      if (response.data?.results) {
+        setTestCaseResults(prev => ({
+          ...prev,
+          [currentQuestion.id]: response.data.results,
+        }));
+
+        window.dispatchEvent(new CustomEvent('evaluation-complete', {
+          detail: { results: response.data.results, questionId: currentQuestion.id },
+        }));
+      }
+    } catch (error) {
+      console.error('Evaluation failed:', error);
+      alert(error.response?.data?.error || 'Evaluation failed');
+    } finally {
+      setIsEvaluating(false);
+    }
+  };
 
 
   // Handle stopping all processes
@@ -706,56 +642,68 @@ export default function CNLabWorkspace() {
   };
 
 
-  //Handle Sumission - eval of test cases and log to DB
   const handleSubmit = async () => {
     if (Object.keys(tagToFileMap).length !== tags.length) {
-      alert('⚠️ Please assign a file for every required tag before submitting.');
+      alert('Please assign a file for every tag before submitting.');
       return;
     }
-    
+
     setIsSubmitting(true);
 
     try {
       const question = questions[activeQuestionIdx];
+      const requiredPaths = Object.values(tagToFileMap);
+      const filteredFiles = files.filter(f => requiredPaths.includes(f.path));
 
-      const requiredFileNames = Object.values(tagToFileMap);
-      const filteredFiles = files.filter(f => requiredFileNames.includes(f.path));
-      console.log(filteredFiles);
-      const sourceCode = Object.fromEntries(filteredFiles.map(f => [f.name, f.code]));
+      for (const file of filteredFiles) {
+        await axios.post('http://localhost:5001/api/save-file', {
+          filename: file.name,
+          filePath: file.path,
+          code: file.code,
+        });
+      }
 
-      // Step 1 (mocked for now)
-      // const evalRes = await fetch('/api/submission/eval', { ... });
-      // const { passedCount, totalTestCases } = await evalRes.json();
+      const tagPaths = { ...tagToFileMap };
+      const sourceFiles = Object.fromEntries(filteredFiles.map(f => [f.name, f.code]));
 
-      const passedCount = testCaseResults.filter(tc => tc.status === 'PASS').length || 5;
-      const totalTestCases = testCaseResults.length || 5; // 5/5 for testing
-
-      // Step 2: Submit to DB
-      const payload = {
+      const evalRes = await axios.post('http://localhost:5001/api/evaluation/submit', {
         userId: getCurrentUser(),
+        studentName: getStudentName(),
+        sessionId: getCurrentLabSession(),
+        moduleId: moduleInfo?._id,
         questionId: question.id,
-        module: question.module || 'Week1', //Assume module name for now
-        sourceCode,
-        language,
-        passedCount,
-        totalTestCases,
-      };
-
-      const res = await fetch('http://localhost:5001/api/submission/db', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        tagPaths,
+        sourceFiles,
       });
 
-      const data = await res.json();
-      if (data.success) {
-        alert('✅ Submitted successfully!');
-      } else {
-        throw new Error(data.error);
+      if (evalRes.data?.results) {
+        setTestCaseResults(prev => ({
+          ...prev,
+          [question.id]: evalRes.data.results,
+        }));
       }
+
+      const correctCount = (evalRes.data?.communicationResults || []).filter(r => r.allCorrect).length;
+      const totalCount = evalRes.data?.communicationResults?.length || 0;
+
+      await fetch('http://localhost:5001/api/submission/db', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: getCurrentUser(),
+          questionId: question.id,
+          module: moduleInfo?.name || 'CN Lab',
+          sourceCode: sourceFiles,
+          language: filteredFiles[0]?.language || 'c',
+          passedCount: correctCount,
+          totalTestCases: totalCount,
+        }),
+      });
+
+      alert('Submitted successfully. Communication checks saved for teacher review.');
     } catch (err) {
       console.error('[Frontend] Submission error:', err);
-      alert('❌ Failed to submit.');
+      alert(err.response?.data?.error || 'Failed to submit.');
     } finally {
       setIsSubmitting(false);
     }
@@ -924,6 +872,7 @@ export default function CNLabWorkspace() {
                   onSubmit={handleSubmit}
                   onStopAll={handleStopAll}
                   isRunning={isRunning}
+                  isEvaluating={isEvaluating}
                   isSubmitting={isSubmitting}
                   showQuestion={showQuestion}
                   onToggleQuestion={() => setShowQuestion(true)}
