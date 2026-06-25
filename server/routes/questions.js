@@ -2,7 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { Question } from '../models/Question.js';
+import { Question, CNQuestion } from '../models/Question.js';
 
 const router = express.Router();
 
@@ -53,7 +53,8 @@ router.post('/', async (req, res) => {
     // });
 
     // Create and save the question
-    const question = new Question(questionData);
+    const Model = questionData.moduleType === 'CNQuestion' ? CNQuestion : Question;
+    const question = new Model(questionData);
     await question.save();
     
     res.status(201).json({ 
@@ -102,7 +103,7 @@ router.post('/bulk', async (req, res) => {
     for (const questionData of questions) {
       try {
         // Create new question
-        const newQuestion = new Question(questionData);
+        const newQuestion = new CNQuestion({ ...questionData, moduleType: 'CNQuestion' });
         await newQuestion.save();
         
         results.success.push({

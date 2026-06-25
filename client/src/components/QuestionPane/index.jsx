@@ -75,15 +75,7 @@ export default function QuestionPane({
           </div>
         </div>        <div className="flex items-center space-x-2 text-sm text-gray-600 bg-gray-50 px-3 py-2 rounded-full border border-gray-200">
             <AcademicCapIcon className="w-4 h-4 text-blue-500" />
-            <span className="font-medium">
-              {Array.isArray(question.testCases) 
-                ? question.testCases?.reduce((sum, tc) => sum + (tc.points || 0), 0) 
-                : (
-                    (question.testCases?.server?.reduce((sum, tc) => sum + (tc.points || 0), 0) || 0) +
-                    (question.testCases?.client?.reduce((sum, tc) => sum + (tc.points || 0), 0) || 0)
-                  )
-              } points
-            </span>
+            <span className="font-medium">{question.maxMarks ?? '—'} marks (teacher assigned)</span>
         </div>
       </div>
 
@@ -115,20 +107,13 @@ export default function QuestionPane({
         )}
         {activeTab === 'precode' && (
           <div className="p-6 fade-in-up space-y-4">
-            {/* Show precode and clientPrecode if available */}
-            {question.precode && Object.keys(question.precode).map((fname) => (
-              <div key={fname}>
-                <div className="font-mono text-xs text-gray-500 mb-1">Starter code: <b>{fname}</b></div>
+            {(question.files || []).map((f) => (
+              <div key={f.tag + f.name}>
+                <div className="font-mono text-xs text-gray-500 mb-1">
+                  <b>{f.name}</b> (tag: {f.tag})
+                </div>
                 <pre className="bg-gray-100 border border-gray-200 rounded-lg p-3 text-xs overflow-x-auto mb-4">
-                  {question.precode[fname]}
-                </pre>
-              </div>
-            ))}
-            {question.clientPrecode && Object.keys(question.clientPrecode).map((fname) => (
-              <div key={fname}>
-                <div className="font-mono text-xs text-gray-500 mb-1">Client starter code: <b>{fname}</b></div>
-                <pre className="bg-gray-100 border border-gray-200 rounded-lg p-3 text-xs overflow-x-auto mb-4">
-                  {question.clientPrecode[fname]}
+                  {f.precode}
                 </pre>
               </div>
             ))}

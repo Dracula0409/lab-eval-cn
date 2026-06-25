@@ -40,7 +40,7 @@ router.get('/list-files', (req, res) => {
 router.get('/read-file', (req, res) => {
   const { cwd, filename } = req.query;
 
-  const userId = 'testuser123'; // ✅ works now because it's declared with let
+  const userId = 'testuser123';
   const sessionId = generateSessionId();
   const containerName = `lab_exam_${userId}_${sessionId}`;
 

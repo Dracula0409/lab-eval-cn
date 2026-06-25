@@ -105,6 +105,11 @@ RUN echo "networklab ALL=(ALL) NOPASSWD: /usr/bin/tcpdump, /sbin/sysctl, /usr/sb
 # Allow sudo sysctl to write to read only files 
 RUN echo "alias sysctl='/usr/bin/sudo sysctl'" >> /home/networklab/.bashrc
 
+# Fixed CN evaluation framework (generic scripts — not per-question)
+COPY evaluation_framework/ /home/networklab/evaluation/
+RUN chmod +x /home/networklab/evaluation/*.sh && \
+    chown -R networklab:networklab /home/networklab/evaluation
+
 # Working directory for SSH login
 WORKDIR /home/labuser
 

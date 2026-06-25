@@ -7,6 +7,16 @@ import Session from '../models/Session.js';
 import { createContainerForUser, docker } from '../docker/dockerManager.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { Question } from '../models/Question.js';
+import EvaluationRun from '../models/EvaluationRun.js';
+import {
+  EVAL_DIR,
+  buildNiceScript,
+  buildStudentSh,
+  buildTestcasesJson,
+  parseEvaluatedCsv,
+  toApiResults,
+} from '../utils/evaluationHelper.js';
 
 dotenv.config();
 
@@ -325,217 +335,138 @@ async function execSSH(userId, command, sshPortOverride = null) {
   }
 }
 
+async function createNetworklabConnection(sshPort) {
+  return new Promise((resolve, reject) => {
+    const conn = new Client();
+    conn
+      .on('ready', () => resolve(conn))
+      .on('error', reject)
+      .connect({
+        host: '127.0.0.1',
+        port: sshPort,
+        username: 'networklab',
+        privateKey: fs.readFileSync('./networklab_key'),
+        readyTimeout: 10000,
+      });
+  });
+}
+
+function uploadStringViaConn(conn, remotePath, content) {
+  return new Promise((resolve, reject) => {
+    conn.sftp((err, sftp) => {
+      if (err) return reject(err);
+      const ws = sftp.createWriteStream(remotePath);
+      ws.on('close', resolve);
+      ws.on('error', reject);
+      ws.write(content ?? '');
+      ws.end();
+    });
+  });
+}
+
+function execViaConn(conn, command) {
+  return new Promise((resolve, reject) => {
+    let stdout = '';
+    let stderr = '';
+    conn.exec(command, (err, stream) => {
+      if (err) return reject(err);
+      stream.on('data', (d) => { stdout += d.toString(); });
+      stream.stderr.on('data', (d) => { stderr += d.toString(); });
+      stream.on('close', (code) => resolve({ stdout, stderr, exitCode: code }));
+    });
+  });
+}
+
 /**
- * Runs code and evaluation script inside user's container.
- * Returns combined stdout, stderr and exit code.
+ * Runs question-specific nice.sh inside networklab evaluation dir.
+ * Generic framework scripts must already exist in the container image.
  */
-export async function runAndEvaluate({ 
-  userId, 
-  filename, 
-  code, 
-  language, 
-  evaluationScript, 
-  testCases = [],
-  clientCount = 1,
-  clientDelay = 0.5,
-  codeType = 'server' // Default to server evaluation
+export async function runAndEvaluate({
+  userId,
+  studentName = '',
+  sessionId,
+  moduleId,
+  questionId,
+  tagPaths = {},
+  sourceFiles = {},
+  runType = 'evaluate',
 }) {
-  // Determine relative directory and workingDir in container
-  // The path inside the container always starts at /home/labuser
-  // Avoid adding /home/labuser again if the path already starts with it
-  const relDir = filename.includes('/') ? filename.split('/').slice(0, -1).join('/') : '';
-  const workingDir = relDir.startsWith('/home/labuser') ? relDir : 
-                     relDir ? `/home/labuser/${relDir}` : '/home/labuser';
+  await ensureSessionContainer(userId);
+  const session = await Session.findOne({ userId }).sort({ createdAt: -1 });
+  if (!session) throw new Error('No active session for user');
+
+  const question = await Question.findById(questionId).lean();
+  if (!question) throw new Error(`Question ${questionId} not found`);
+
+  const questionKey = question.questionKey || 'q1';
+  const testcases = question.testcases || {};
+  const evalScriptBody = question.evalScript || '';
+  const inputContent = question.input || '';
+
+  const niceScript = buildNiceScript({ questionKey, evalScriptBody, tagPaths });
+  const testcasesJson = buildTestcasesJson(questionKey, testcases);
+  const studentSh = buildStudentSh(userId, studentName);
+
+  const conn = await createNetworklabConnection(session.sshPort);
 
   try {
-    // Save the user's code to the container
-    await saveFileToContainer({ userId, filename, code });
-      // Create a temporary test file with all the test case data
-    // Extract the correct test cases based on the file type
-    const isClient = filename.toLowerCase().includes('client');
-    const actualCodeType = isClient ? 'client' : 'server'; 
-    
-    // Override codeType based on filename detection
-    codeType = actualCodeType;
-      // Extract the appropriate test cases for the file type
-    // Handle both array format and object format with server/client keys
-    const actualTestCases = Array.isArray(testCases) 
-      ? testCases 
-      : (testCases[codeType] || []);
-    
-    const testDataObj = {
-      testCases: actualTestCases,  // Pass only the relevant test cases (server or client)
-      clientCount,
-      clientDelay,
-      codeType
+    await uploadStringViaConn(conn, `${EVAL_DIR}/nice.sh`, niceScript);
+    await uploadStringViaConn(conn, `${EVAL_DIR}/testcases.json`, testcasesJson);
+    await uploadStringViaConn(conn, `${EVAL_DIR}/input`, inputContent);
+    await uploadStringViaConn(conn, `${EVAL_DIR}/student.sh`, studentSh);
+
+    for (const filePath of Object.values(tagPaths)) {
+      const base = path.posix.basename(filePath);
+      await execViaConn(
+        conn,
+        `ln -sf "${filePath}" "${EVAL_DIR}/${base}"`
+      );
+    }
+
+    await execViaConn(conn, `chmod +x ${EVAL_DIR}/nice.sh`);
+
+    const fileArgs = Object.values(tagPaths)
+      .map((p) => `"${p}"`)
+      .join(' ');
+
+    const { stdout, stderr, exitCode } = await execViaConn(
+      conn,
+      `cd ${EVAL_DIR} && bash nice.sh ${fileArgs}`
+    );
+
+    const csvPath = `${EVAL_DIR}/${userId}_evaluated.csv`;
+    const { stdout: csvContent } = await execViaConn(conn, `cat ${csvPath} 2>/dev/null || true`);
+
+    const communicationResults = parseEvaluatedCsv(csvContent, userId);
+    const results = toApiResults(communicationResults);
+
+    const runDoc = await EvaluationRun.create({
+      userId,
+      studentName,
+      sessionId,
+      moduleId,
+      questionId,
+      questionKey,
+      runType,
+      tagPaths,
+      sourceFiles,
+      communicationResults,
+      rawCsv: csvContent,
+      stdout,
+      stderr,
+      exitCode,
+    });
+
+    return {
+      runId: runDoc._id,
+      results,
+      communicationResults,
+      stdout,
+      stderr,
+      exitCode,
     };
-    const testFilePath = `/tmp/.test_data_${userId}.json`;
-    const jsonContent = JSON.stringify(testDataObj, null, 2);
-    
-    // Create necessary directories
-    await execSSH(userId, 'mkdir -p /tmp/.eval_scripts /tmp/.eval_scripts/server_scripts').catch(err => {
-      console.error('[EVAL] Failed to create directories:', err);
-      throw new Error('Failed to prepare evaluation environment');
-    });
-
-    // Write test data to container
-    await uploadFileContent(userId, jsonContent, testFilePath);
-
-    // Determine which evaluation script to use based on codeType
-    const mainEvalScript = codeType === 'client' ? 'client_evaluator.py' : 'server_evaluator.py';
-      // Copy the main evaluation script to the container
-    const srcMainScriptPath = `${process.cwd()}/evaluation_scripts/${mainEvalScript}`;
-    const destMainScriptPath = `/tmp/.eval_scripts/${mainEvalScript}`;
-    await uploadLocalFile(userId, srcMainScriptPath, destMainScriptPath);
-    
-    // Copy supporting modules based on the code type (server or client)
-    if (codeType === 'server') {
-      // Create the server_scripts directory
-      await execSSH(userId, `mkdir -p /tmp/.eval_scripts/server_scripts`).catch(err => {
-        console.warn('[EVAL] Failed to create server_scripts directory:', err);
-      });
-      
-      const serverModules = [
-        'evaluate_server.py',
-        'utils.py',
-        'validators.py',
-        'client_actions.py'
-      ];
-      
-      // Copy each supporting module
-      for (const module of serverModules) {
-        const srcModulePath = `${process.cwd()}/evaluation_scripts/server_scripts/${module}`;
-        const destModulePath = `/tmp/.eval_scripts/server_scripts/${module}`;
-        
-        try {
-          await uploadLocalFile(userId, srcModulePath, destModulePath);
-          console.log(`[EVAL] Successfully copied ${module}`);
-        } catch (err) {
-          console.warn(`[EVAL] Failed to copy module ${module}:`, err);
-          // Continue with other modules
-        }
-      }
-      
-      // Create __init__.py to make imports work
-      await uploadFileContent(userId, '', '/tmp/.eval_scripts/server_scripts/__init__.py');
-    } else if (codeType === 'client') {
-      // Create the client_scripts directory
-      await execSSH(userId, `mkdir -p /tmp/.eval_scripts/client_scripts`).catch(err => {
-        console.warn('[EVAL] Failed to create client_scripts directory:', err);
-      });
-      
-      const clientModules = [
-        'evaluate_client.py',
-        'utils.py',
-        'validators.py',
-        'test_servers.py'
-      ];
-      
-      // Copy each supporting module
-      for (const module of clientModules) {
-        const srcModulePath = `${process.cwd()}/evaluation_scripts/client_scripts/${module}`;
-        const destModulePath = `/tmp/.eval_scripts/client_scripts/${module}`;
-        
-        try {
-          await uploadLocalFile(userId, srcModulePath, destModulePath);
-          console.log(`[EVAL] Successfully copied ${module}`);
-        } catch (err) {
-          console.warn(`[EVAL] Failed to copy module ${module}:`, err);
-          // Continue with other modules
-        }
-      }
-      
-      // Create __init__.py to make imports work
-      await uploadFileContent(userId, '', '/tmp/.eval_scripts/client_scripts/__init__.py');
-    }
-    
-    // Make all scripts executable
-    await execSSH(userId, `chmod +x /tmp/.eval_scripts/*.py /tmp/.eval_scripts/*_scripts/*.py`);    // Run the evaluation for each test case
-    const safeTestCases = Array.isArray(actualTestCases) ? actualTestCases : [];
-    console.log(`[EVAL] Number of test cases: ${safeTestCases.length}, Code type: ${codeType}`);
-    
-    const results = [];
-    
-    for (let i = 0; i < safeTestCases.length; i++) {
-      // Make sure we're using an absolute path to the file
-      // If filename is already absolute, use it; otherwise prepend workingDir
-      const fullFilePath = filename.startsWith('/') ? filename : 
-                          `${workingDir}/${filename.split('/').pop()}`;
-      
-      const execCmd = `cd ${workingDir} && python3 ${destMainScriptPath} ${fullFilePath} ${testFilePath} ${i}`;
-      
-      console.log(`[EVAL] Exec command: ${execCmd}`);
-      
-      try {
-        // Execute the command and get the output
-        const { stdout, stderr, exitCode } = await execSSH(userId, execCmd);
-        
-        console.log(`[EVAL][TestCase ${i}] Result code: ${exitCode}`);
-        
-        // Extract just the RESULT line for clean output to frontend
-        const resultLine = (stdout.match(/RESULT:[^:\n]+:[^\n]+/m) || [''])[0];
-        
-        // Parse the result line
-        let status = 'FAIL';
-        let message = 'Execution failed';
-        
-        if (resultLine) {
-          const parts = resultLine.split(':');
-          if (parts.length >= 3) {
-            status = parts[1];
-            message = parts.slice(2).join(':');
-          }
-        }
-        
-        // For HTTP evaluation tests, the actual output might have "Server output:" prefix
-        // which needs to be removed when comparing against expected output
-        let cleanedMessage = message;
-        if (message.includes('Server output:')) {
-          cleanedMessage = message.replace('Server output:', '').trim();
-        }
-        
-        // Check if expected output is in the cleaned message
-        const expectedOutput = safeTestCases[i]?.expectedOutput;
-        if (expectedOutput && cleanedMessage.includes(expectedOutput)) {
-          status = 'PASS';
-        }
-        
-        results.push({
-          stdout: resultLine || stdout,
-          stderr: stderr,
-          exitCode: exitCode,
-          status: status,
-          message: message,
-          // Add these fields so they persist in the frontend 
-          description: safeTestCases[i].description,
-          points: safeTestCases[i].points,
-          actualOutput: message
-        });
-      } catch (error) {
-        console.error(`[EVAL] Error running test case ${i}:`, error);
-        results.push({
-          stdout: '',
-          stderr: String(error),
-          exitCode: 1,
-          status: 'FAIL',
-          message: `Error: ${error.message || 'Unknown error'}`,
-          description: safeTestCases[i].description,
-          points: safeTestCases[i].points,
-          actualOutput: `Error during evaluation: ${error.message || 'Unknown error'}`
-        });
-      }
-    }
-    
-    // Clean up - don't fail if cleanup fails
-    execSSH(userId, `rm -rf ${testFilePath} /tmp/.eval_scripts`).catch(err => {
-      console.warn('[EVAL] Cleanup failed:', err);
-    });
-    
-    return { results };
-
-  } catch (error) {
-    console.error('[EVAL] Error:', error);
-    throw error;
+  } finally {
+    conn.end();
   }
 }
 

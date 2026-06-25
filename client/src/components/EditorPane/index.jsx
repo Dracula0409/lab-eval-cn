@@ -29,6 +29,7 @@ export default function EditorPane({
   onEvaluate,
   onSubmit,
   isRunning,
+  isEvaluating,
   isSubmitting,
   showQuestion,
   onToggleQuestion,
@@ -237,6 +238,7 @@ export default function EditorPane({
         showTerminal={showTerminal}
         setShowTerminal={setShowTerminal}
         onEvaluate={onEvaluate}
+        isEvaluating={isEvaluating}
       />
 
       {/* Click outside to close settings */}

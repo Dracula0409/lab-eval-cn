@@ -16,17 +16,18 @@ import {
 const initialQuestion = {
   title: '',
   description: '',
-  precode: { 'server.c': '// Add starter code here\n' },
-  clientPrecode: { 'client.c': '// Add starter code here\n' },
-  solution: { 'server.c': '// Add solution code here\n' },
-  clientSolution: { 'client.c': '// Add solution code here\n' },
-  testCases: {
-    server: [{ input: '', expectedOutput: '', description: '', points: 5, matchType: 'exact' }],
-    client: []
+  questionKey: 'q1',
+  maxMarks: 15,
+  files: [
+    { name: 'server.c', tag: 's1', precode: '#include <stdio.h>\n// server starter\n' },
+    { name: 'client.c', tag: 'c1', precode: '#include <stdio.h>\n// client starter\n' },
+  ],
+  testcases: {
+    testcase1: [[0], { c1_to_s1: 'Hi' }, [0], { s1_to_c1: 'Hi' }],
+    testcase2: [[0], { c1_to_s1: 'OpenAI' }, [0], { s1_to_c1: 'OpenAI' }],
   },
-  evaluationScript: '',
-  clientCount: 0,
-  clientDelay: 0,
+  input: 'Hi\nOpenAI\n',
+  evalScript: `START_TCPDUMP "tcp" "\${SERVER_PORT[0]}" "transfer.pcap"\nsleep 2\n\nCOMPILE_RUN "\$TAG_s1" myserver \${SERVER_PORT[0]}\nCHECK_PORT "127.0.0.1:\${SERVER_PORT[0]}" "0.0.0.0:0000" myserver tcp LISTEN\n\nfor tc in 1 2; do\n  COMPILE_RUN "\$TAG_c1" myclient \${CLIENT_PORT[0]}\n  INPUT myclient input \${tc} 1\n  sleep 2\n  END_TCPDUMP\n  EVALUATE tcp \${tc}\n  START_TCPDUMP "tcp" "\${SERVER_PORT[0]}" "transfer.pcap"\n  sleep 1\ndone\n\nCLEAR_ALL`,
 };
 
 // Module form initial values
@@ -221,19 +222,21 @@ export default function TeacherUpload() {
       // Remove unnecessary fields (like evalType) that are not defined in the schema
       const { evalType, ...payload } = data;
 
-      // Build the payload without stringifying object fields. Our backend expects
-      // precode, clientPrecode, solution, clientSolution, and testCases to be objects.
       const questionData = {
         ...payload,
         description: processedDescription,
-        precode: data.precode,
-        clientPrecode: data.clientPrecode,
-        solution: data.solution,
-        clientSolution: data.clientSolution,
-        testCases: data.testCases,
-        moduleType: "CNQuestion",
-        lab: "123" // Replace with a valid lab ID 
+        moduleType: 'CNQuestion',
+        lab: '123',
       };
+
+      delete questionData.precode;
+      delete questionData.clientPrecode;
+      delete questionData.solution;
+      delete questionData.clientSolution;
+      delete questionData.testCases;
+      delete questionData.evaluationScript;
+      delete questionData.clientCount;
+      delete questionData.clientDelay;
 
       if (editingQuestionId) {
         await axios.put(`http://localhost:5001/api/questions/${editingQuestionId}`, questionData);
@@ -706,18 +709,11 @@ export default function TeacherUpload() {
                   errors={errors}
                   control={control}
                   reset={reset}
+                  setValue={setValue}
                   initialQuestion={initialQuestion}
                   editingQuestionId={editingQuestionId}
                   isLoading={isLoading}
                   watchedValues={watchedValues}
-                  codeType={codeType}
-                  setCodeType={setCodeType}
-                  handleCodeChange={handleCodeChange}
-                  addCodeFile={addCodeFile}
-                  deleteCodeFile={deleteCodeFile}
-                  addTestCase={addTestCase}
-                  removeTestCase={removeTestCase}
-                  handleTestCaseChange={handleTestCaseChange}
                   getLanguageFromFilename={getLanguageFromFilename}
                 />
               </div>
