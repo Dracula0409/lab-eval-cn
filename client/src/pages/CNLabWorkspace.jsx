@@ -8,6 +8,7 @@ import TerminalPane from '../components/TerminalPane';
 import FileSelectorModal from '../components/EditorPane/fileSelectorModal';
 import ResizeHandle from '../components/shared/ResizeHandle';
 import { useIsMobile } from '../components/utils/useIsMobile';
+import { summarizeResults } from '../components/utils/testcaseHelper';
 import { InformationCircleIcon } from '@heroicons/react/24/outline';
 
 // Create a hardcoded session ID for testing
@@ -21,6 +22,7 @@ if (!localStorage.getItem('labSessionId')) {
 
 // Helper function to get current lab session ID
 const getCurrentLabSession = () => localStorage.getItem('labSessionId') || TEST_SESSION_ID;
+const LABUSER_HOME = '/home/labuser';
 
 
 const MobileTabs = ({ activeTab, setActiveTab, tabs }) => (
@@ -75,8 +77,13 @@ export default function CNLabWorkspace() {
   const [isRunning, setIsRunning] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [testCaseResults, setTestCaseResults] = useState([]);
+  const [testCaseResults, setTestCaseResults] = useState({});
+  const [questionPaneTab, setQuestionPaneTab] = useState('description');
+  const [evalMessage, setEvalMessage] = useState(null);
+  const [submissionRefreshTrigger, setSubmissionRefreshTrigger] = useState(0);
   const panelRef = useRef(null);
+  const dirtyFileIdsRef = useRef(new Set());
+  const fileHydrationRequestRef = useRef(0);
   // const [isSubmitted, setIsSubmitted] = useState(false);
 
   useEffect(() => {
@@ -279,24 +286,46 @@ export default function CNLabWorkspace() {
   useEffect(() => {
     if (questions?.length > 0 && questions[activeQuestionIdx]) {
       const activeQuestion = questions[activeQuestionIdx];
+      const requestId = fileHydrationRequestRef.current + 1;
+      fileHydrationRequestRef.current = requestId;
 
-      const filesFromQuestion = (activeQuestion.files || []).map(f => {
+      const loadFilesForQuestion = async () => {
+        const filesFromQuestion = await Promise.all((activeQuestion.files || []).map(async (f) => {
         let lang = 'plaintext';
         if (f.name?.endsWith('.py')) lang = 'python';
         else if (f.name?.endsWith('.c')) lang = 'c';
         else if (f.name?.endsWith('.js')) lang = 'javascript';
 
+        const filePath = `${LABUSER_HOME}/${f.name}`;
+        let code = f.precode || '';
+
+        try {
+          const response = await axios.get('http://localhost:5001/api/file/read-file', {
+            params: {
+              cwd: LABUSER_HOME,
+              filename: f.name,
+              userId: getCurrentUser(),
+            },
+          });
+          code = response.data?.code ?? code;
+        } catch {
+          // If the student has not created/saved this file yet, use the starter code.
+        }
+
         return {
           id: f.tag || f.name.replace(/\.[^/.]+$/, ''),
           name: f.name,
           tag: f.tag,
-          path: `${currentWorkingDir}/${f.name}`,
+          path: filePath,
           language: lang,
-          code: f.precode || '',
+          code,
         };
-      });
+      }));
+
+      if (fileHydrationRequestRef.current !== requestId) return;
 
       setFiles(filesFromQuestion);
+      dirtyFileIdsRef.current = new Set();
       if (filesFromQuestion.length > 0) {
         setActiveFileId(filesFromQuestion[0].id);
       }
@@ -306,12 +335,18 @@ export default function CNLabWorkspace() {
         if (f.tag) autoMap[f.tag] = f.path;
       });
       setTagToFileMap(autoMap);
+      };
+
+      loadFilesForQuestion();
     }
-  }, [questions, activeQuestionIdx, currentWorkingDir]);
+  }, [questions, activeQuestionIdx]);
 
 
   // Handle file operations
   const updateCode = (newCode) => {
+    if (activeFileId) {
+      dirtyFileIdsRef.current.add(activeFileId);
+    }
     setFiles(prevFiles => 
       prevFiles.map(f => 
         f.id === activeFileId ? {...f, code: newCode} : f
@@ -324,8 +359,10 @@ export default function CNLabWorkspace() {
   useEffect(() => {
     const timeoutId = setTimeout(() => {
       const activeFile = files.find(f => f.id === activeFileId);
-      if (activeFile && activeFile.code?.trim()) {
-        saveFile(activeFile);
+      if (activeFile && activeFile.code?.trim() && dirtyFileIdsRef.current.has(activeFile.id)) {
+        saveFile(activeFile).then(() => {
+          dirtyFileIdsRef.current.delete(activeFile.id);
+        });
       }
     }, 1000); // Debounce: wait 1 second after user stops typing
 
@@ -365,6 +402,7 @@ export default function CNLabWorkspace() {
         language
       }
     ]);
+    dirtyFileIdsRef.current.add(newId);
     setActiveFileId(newId);
     setTimeout(() => {
       setNewFileCreated(true);
@@ -448,11 +486,14 @@ export default function CNLabWorkspace() {
       : activeFile.path;
     
     setTimeout(() => {
+      // #region agent log
+      fetch('http://127.0.0.1:7428/ingest/2fbaf848-a638-4e46-beb4-cd433f8f423b',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d3d7c5'},body:JSON.stringify({sessionId:'d3d7c5',location:'CNLabWorkspace.jsx:handleRun',message:'run dispatch',data:{fullPath,activeFilePath:activeFile.path,currentWorkingDir},timestamp:Date.now(),hypothesisId:'H4'})}).catch(()=>{});
+      // #endregion
       window.dispatchEvent(new CustomEvent('run-file-in-terminal', {
         detail: {
           code: activeFile.code,
-          filename: activeFile.name, // use full path including current directory
-          filePath: activeFile.path, // use full path including current directory
+          filename: activeFile.name,
+          filePath: fullPath,
           language: activeFile.language || language
         }
       }));
@@ -616,18 +657,29 @@ export default function CNLabWorkspace() {
         sourceFiles,
       });
 
-      if (response.data?.results) {
-        setTestCaseResults(prev => ({
-          ...prev,
-          [currentQuestion.id]: response.data.results,
-        }));
+      const results = response.data?.results ?? [];
+      setTestCaseResults((prev) => ({
+        ...prev,
+        [currentQuestion.id]: results,
+      }));
+      setEvalMessage(null);
+      setQuestionPaneTab('testcases');
+      setShowQuestion(true);
 
-        window.dispatchEvent(new CustomEvent('evaluation-complete', {
-          detail: { results: response.data.results, questionId: currentQuestion.id },
-        }));
+      const { total } = summarizeResults(results);
+      if (total === 0) {
+        const hint = response.data?.stderr?.trim() || 'Evaluation finished but no test results were produced. Check that your code compiles.';
+        setEvalMessage(hint);
       }
+
+      window.dispatchEvent(new CustomEvent('evaluation-complete', {
+        detail: { results, questionId: currentQuestion.id },
+      }));
     } catch (error) {
       console.error('Evaluation failed:', error);
+      // #region agent log
+      fetch('http://127.0.0.1:7428/ingest/2fbaf848-a638-4e46-beb4-cd433f8f423b',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d3d7c5'},body:JSON.stringify({sessionId:'d3d7c5',location:'CNLabWorkspace.jsx:handleEvaluate',message:'evaluation error',data:{error:error.response?.data?.error||error.message,tagToFileMap},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+      // #endregion
       alert(error.response?.data?.error || 'Evaluation failed');
     } finally {
       setIsEvaluating(false);
@@ -677,14 +729,17 @@ export default function CNLabWorkspace() {
       });
 
       if (evalRes.data?.results) {
-        setTestCaseResults(prev => ({
+        setTestCaseResults((prev) => ({
           ...prev,
           [question.id]: evalRes.data.results,
         }));
       }
 
-      const correctCount = (evalRes.data?.communicationResults || []).filter(r => r.allCorrect).length;
-      const totalCount = evalRes.data?.communicationResults?.length || 0;
+      const results = evalRes.data?.results ?? [];
+      const testcaseCount = Object.keys(question.testcases || {}).length;
+      const { passed: passedFromResults } = summarizeResults(results);
+      const correctCount = results.length > 0 ? passedFromResults : 0;
+      const totalCount = results.length > 0 ? results.length : testcaseCount;
 
       await fetch('http://localhost:5001/api/submission/db', {
         method: 'POST',
@@ -697,10 +752,14 @@ export default function CNLabWorkspace() {
           language: filteredFiles[0]?.language || 'c',
           passedCount: correctCount,
           totalTestCases: totalCount,
+          evaluationResults: results,
+          evalError: results.length === 0 ? (evalRes.data?.stderr?.trim() || null) : null,
         }),
       });
 
-      alert('Submitted successfully. Communication checks saved for teacher review.');
+      const statusLabel = totalCount > 0 && correctCount === totalCount ? 'All test cases passed' : `${correctCount}/${totalCount} test cases passed`;
+      setSubmissionRefreshTrigger((n) => n + 1);
+      alert(`Submitted successfully. ${statusLabel}`);
     } catch (err) {
       console.error('[Frontend] Submission error:', err);
       alert(err.response?.data?.error || 'Failed to submit.');
@@ -771,7 +830,11 @@ export default function CNLabWorkspace() {
               questions={questions}
               activeQuestionIdx={activeQuestionIdx}
               setActiveQuestionIdx={setActiveQuestionIdx}
-              testCaseResults={testCaseResults}
+              testCaseResults={testCaseResults[questions[activeQuestionIdx]?.id] || []}
+              activeTab={questionPaneTab}
+              setActiveTab={setQuestionPaneTab}
+              evalMessage={evalMessage}
+              submissionRefreshTrigger={submissionRefreshTrigger}
             />
           )}
           {activeTab === 'editor' && (
@@ -843,12 +906,16 @@ export default function CNLabWorkspace() {
                         </div>
                       </div>
                     ) : (
-                      <QuestionPane 
+                      <QuestionPane
                         questions={questions}
                         activeQuestionIdx={activeQuestionIdx}
                         setActiveQuestionIdx={setActiveQuestionIdx}
                         onClose={() => setShowQuestion(false)}
                         testCaseResults={testCaseResults[questions[activeQuestionIdx]?.id] || []}
+                        activeTab={questionPaneTab}
+                        setActiveTab={setQuestionPaneTab}
+                        evalMessage={evalMessage}
+                        submissionRefreshTrigger={submissionRefreshTrigger}
                       />
                     )}
                   </Panel>

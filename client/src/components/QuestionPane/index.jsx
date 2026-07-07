@@ -14,7 +14,11 @@ export default function QuestionPane({
   activeQuestionIdx, 
   setActiveQuestionIdx, 
   onClose, 
-  testCaseResults 
+  testCaseResults,
+  activeTab: controlledTab,
+  setActiveTab: setControlledTab,
+  evalMessage,
+  submissionRefreshTrigger = 0,
 }) {
   if (!questions || !Array.isArray(questions) || questions.length === 0) {
     return (
@@ -23,7 +27,9 @@ export default function QuestionPane({
       </div>
     );
   }
-  const [activeTab, setActiveTab] = useState('description');
+  const [internalTab, setInternalTab] = useState('description');
+  const activeTab = controlledTab ?? internalTab;
+  const setActiveTab = setControlledTab ?? setInternalTab;
   const question = questions[activeQuestionIdx];
   const [processedDescription, setProcessedDescription] = useState('');
   
@@ -121,20 +127,20 @@ export default function QuestionPane({
         )}          
         {activeTab === 'testcases' && (
           <div className="fade-in-up">
-            {console.log('QuestionPane passing to TestSelector:', { 
-              question, 
-              questionTestCases: question?.testCases,
-              testCaseResults 
-            })}
             <TestSelector 
               question={question}
               testCaseResults={testCaseResults}
+              evalMessage={evalMessage}
             />
           </div>
         )}
         {activeTab === 'submissions' && (
           <div>
-            <Submissions userId= { 'testuser123' } questionId= { question.id } /> 
+            <Submissions
+              userId="testuser123"
+              questionId={question.id}
+              refreshTrigger={submissionRefreshTrigger}
+            />
           </div>
         )}
       </div>

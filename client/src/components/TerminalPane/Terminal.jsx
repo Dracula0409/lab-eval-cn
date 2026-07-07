@@ -11,7 +11,7 @@ const TerminalComponent = ({
   onSessionEnd,
   initialBuffer = [], 
   onData,
-  token,
+  userId,
   setCurrentWorkingDir
 }) => {
   const terminalRef = useRef(null);
@@ -25,8 +25,9 @@ const TerminalComponent = ({
   const lastSentDataRef = useRef('');
   const sessionEnded = useRef(false);
 
-  const hardcodedJWT = token || 'FAKE_TEST_TOKEN';
-  const wsURL = `ws://localhost:5001/ws/ssh?token=${encodeURIComponent(hardcodedJWT)}&terminalId=${terminalId}`;
+  // No real JWT auth yet — fall back to the test user if nobody's logged in.
+  const effectiveUserId = userId || 'testuser123';
+  const wsURL = `ws://localhost:5001/ws/ssh?userId=${encodeURIComponent(effectiveUserId)}&terminalId=${terminalId}`;
 
   //Track current Working directory
   const requestCurrentWorkingDir = () => {

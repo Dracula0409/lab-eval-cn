@@ -21,10 +21,12 @@ export default function QuestionTabs({ activeTab, setActiveTab, question }) {
       id: 'testcases',
       label: 'Test Cases',
       icon: <BeakerIcon className="w-4 h-4" />,
-      badge: Array.isArray(question.testCases)
-        ? question.testCases.length
-        : ((question.testCases?.server?.length || 0) + 
-           (question.testCases?.client?.length || 0))
+      badge: question?.testcases
+        ? Object.keys(question.testcases).length
+        : (Array.isArray(question?.testCases)
+          ? question.testCases.length
+          : ((question?.testCases?.server?.length || 0) +
+             (question?.testCases?.client?.length || 0)))
     },
     {
       id: 'submissions',

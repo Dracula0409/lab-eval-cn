@@ -13,7 +13,7 @@ export default function TerminalPane({
   termVisible,
   setCurrentWorkingDir
 }) {
-  const jwtToken = localStorage.getItem('jwt'); // assuming JWT is stored here
+  const studentId = localStorage.getItem('studentId'); // set by Login.jsx on sign-in
 
   const [terminals, setTerminals] = useState([
     { id: 'main', name: 'Main Terminal', buffer: [] }
@@ -60,32 +60,13 @@ export default function TerminalPane({
       terminalId={term.id}
       initialBuffer={term.buffer}
       onData={chunk => updateBuffer(term.id, chunk)}
-      token={jwtToken}
+      userId={studentId}
       setCurrentWorkingDir={(termId, cwd) => setCurrentWorkingDir(cwd)} 
     />
   ));
 
   return (
     <div className="flex flex-col h-full bg-gray-900">
-      {/* <div className="flex items-center justify-between py-0.5 px-3 bg-gray-800 border-b border-gray-700">
-        <div className="flex items-center space-x-3">
-          <CommandLineIcon className="w-5 h-5 text-green-400" />
-          <h2 className="text-md font-semibold text-white">Terminal</h2>
-        </div>
-
-        <div className="flex items-center space-x-2">
-          {onClose && (
-            <button
-              onClick={onClose}
-              className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
-              title="Close terminal"
-            >
-              <XMarkIcon className="w-5 h-5" />
-            </button>
-          )}
-        </div>
-      </div> */}
-
       <TerminalTabs
         terminals={terminals}
         activeTerminalId={activeTerminalId}
