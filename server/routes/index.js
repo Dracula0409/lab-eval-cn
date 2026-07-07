@@ -9,6 +9,7 @@ import sessionsRoute from './sessions.js';
 import evaluationRoute from './evaluation.js';
 import coursesRoute from './courses.js';
 import { saveFileToContainer } from '../controllers/sshController.js';
+import { getContainerNameForUser } from '../utils/sessionHelper.js';
 
 const router = Router();
 
@@ -21,23 +22,11 @@ router.use('/modules', moduleRoutes);
 router.use('/sessions', sessionsRoute);
 router.use('/courses', coursesRoute);
 
-function generateSessionId() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = `${now.getMonth() + 1}`.padStart(2, '0');
-  const day = `${now.getDate()}`.padStart(2, '0');
-  const period = now.getHours() < 12 ? 'FN' : 'AN';
-  return `${year}${month}${day}_${period}`;
-}
+async function renameFileInContainer({ userId, oldPath, newPath }) {
+  const containerName = await getContainerNameForUser(userId);
+  const cmd = `mv "${oldPath}" "${newPath}"`;
 
-function renameFileInContainer({ userId, oldPath, newPath }) {
   return new Promise((resolve, reject) => {
-    const userId = 'testuser123'; //hardcoded for now, must use JWT
-    const sessionId = generateSessionId();
-    const containerName = `lab_exam_${userId}_${sessionId}`;
-    
-    const cmd = `mv ${oldPath} ${newPath}`;
-
     exec(`docker exec ${containerName} sh -c '${cmd}'`, (err, stdout, stderr) => {
       if (err) {
         console.error('Rename failed:', stderr || err);

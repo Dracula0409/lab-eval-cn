@@ -170,7 +170,7 @@ with open(eval_file, "w", newline="") as f:
     writer.writerow(["student_id", "question.testcase", "c->s_conn", "c->s_data", "s->c_conn", "s->c_data"])
     writer.writerows(rows)
 
-print(f"Evaluation written to {eval_file}")
+#print(f"Evaluation written to {eval_file}")
 
 # ----------- Persistence Check (Conditional) -----------
 if max_reconnects > 0:
@@ -213,7 +213,7 @@ if max_reconnects > 0:
         writer.writerow(["source", "destination", "persistence", "reconnections"])
         writer.writerows(results)
 
-    print(f"Connection status written to {status_file}")
+    #print(f"Connection status written to {status_file}")
 
 # ----------- TCP LISTEN + ESTABLISHED -----------
 
@@ -278,4 +278,4 @@ with open(f"{student_id}_conn.csv", "w", newline="") as f:
         for (client, server), status in established_states.items():
             writer.writerow([client, server, status])
 
-print(f"Connection summary written to {student_id}_conn.csv")
+#print(f"Connection summary written to {student_id}_conn.csv")

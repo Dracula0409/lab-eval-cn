@@ -25,6 +25,8 @@ RUN apt-get update && apt-get install -y \
     sudo && \
     apt-get clean
 
+RUN apt-get update && apt-get install -y acl && apt-get clean
+
 # Create labuser (least privileges, no sudo)
 RUN useradd -m -s /bin/bash labuser && \
     mkdir -p /home/labuser/.ssh && \
@@ -101,9 +103,6 @@ RUN for user in labuser networklab; do \
 # Only allow tcpdump and sysctl via sudo for networklab (but no sudo access to anything else)
 RUN echo "networklab ALL=(ALL) NOPASSWD: /usr/bin/tcpdump, /sbin/sysctl, /usr/sbin/sysctl, /bin/sysctl, /usr/bin/sysctl" > /etc/sudoers.d/networklab_limited && \
     chmod 440 /etc/sudoers.d/networklab_limited
-
-# Allow sudo sysctl to write to read only files 
-RUN echo "alias sysctl='/usr/bin/sudo sysctl'" >> /home/networklab/.bashrc
 
 # Fixed CN evaluation framework (generic scripts — not per-question)
 COPY evaluation_framework/ /home/networklab/evaluation/

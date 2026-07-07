@@ -15,6 +15,8 @@ import {
   buildStudentSh,
   buildTestcasesJson,
   parseEvaluatedCsv,
+  parseConnCsv,
+  parseStatusCsv,
   toApiResults,
 } from '../utils/evaluationHelper.js';
 
@@ -64,10 +66,11 @@ export function initSSHWebSocket(server) {
   });
 
   wss.on('connection', async (ws) => {
-    const { terminalId = 'main' } = ws.query;
+    const { terminalId = 'main', userId: queryUserId } = ws.query;
 
-    // FOR TESTING PURPOSES: Hardcoded user ID (simulate JWT extraction)
-    const userId = 'testuser123';
+    // No real JWT auth yet — the client sends the logged-in student's ID
+    // directly. Fall back to the test user only if none was provided.
+    const userId = queryUserId || 'testuser123';
 
     try {
       const { sshPort, sessionId } = await ensureSessionContainer(userId);
@@ -162,7 +165,7 @@ export function initSSHWebSocket(server) {
   });
 }
 
-async function ensureSessionContainer(userId) {
+export async function ensureSessionContainer(userId) {
   const { containerName, sshPort, sessionId } = await createContainerForUser(userId);
 
   let sessionDoc = await Session.findOne({ userId, sessionId });

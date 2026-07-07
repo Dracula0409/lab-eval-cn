@@ -42,6 +42,10 @@ export async function createContainerForUser(userId) {
     if (containerState !== 'running') {
       try {
         await existingContainer.start();
+        await runInContainer(existingContainer, `
+        setfacl -m u:networklab:rwx /home/labuser
+        setfacl -d -m u:networklab:rwx /home/labuser
+        `);
         console.log(`[Dockerode] Restarted container ${containerName}`);
       } catch (err) {
         console.error(`[Dockerode] Failed to restart container:`, err.message);
@@ -86,9 +90,40 @@ export async function createContainerForUser(userId) {
   });
 
   await container.start();
+  await runInContainer(container, `
+  setfacl -m u:networklab:rwx /home/labuser
+  setfacl -d -m u:networklab:rwx /home/labuser
+  `);
   console.log(`[Dockerode] Started new container ${containerName} on port ${sshPort}`);
 
   return { containerName, volumeName, sshPort, sessionId };
+}
+
+async function runInContainer(container, cmd) {
+  const exec = await container.exec({
+    User: 'root',
+    Cmd: ['bash', '-c', cmd],
+    AttachStdout: true,
+    AttachStderr: true,
+  });
+
+  const stream = await exec.start({});
+
+  return new Promise((resolve, reject) => {
+    let output = '';
+
+    stream.on('data', (chunk) => {
+      output += chunk.toString();
+    });
+
+    stream.on('end', async () => {
+      const inspect = await exec.inspect();
+      if (inspect.ExitCode === 0) resolve(output);
+      else reject(new Error(output));
+    });
+
+    stream.on('error', reject);
+  });
 }
 
 export { docker };

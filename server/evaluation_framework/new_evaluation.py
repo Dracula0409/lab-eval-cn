@@ -60,17 +60,6 @@ ip_to_logical = parse_ports()
 def get_logical(ip):
     return ip_to_logical[ip]
 
-def normalize_logical_tag(tag):
-    """Map short tags (c1, s1, p1) to port-map names (client1, server1)."""
-    tag = tag.strip()
-    if len(tag) >= 2 and tag[0] == 'c' and tag[1:].isdigit():
-        return f"client{tag[1:]}"
-    if len(tag) >= 2 and tag[0] == 's' and tag[1:].isdigit():
-        return f"server{tag[1:]}"
-    if len(tag) >= 2 and tag[0] == 'p' and tag[1:].isdigit():
-        return f"pclient{tag[1:]}"
-    return tag
-
 def normalize_ip_port(ip_str):
     if ':' in ip_str:
         ip, port = ip_str.split(':')
@@ -215,10 +204,8 @@ for idx, item in enumerate(pairs):
         continue
 
     key, expected_data = next(iter(comm.items()))
-    src_raw, dst_raw = key.split("_to_")
-    src_logical = normalize_logical_tag(src_raw)
-    dst_logical = normalize_logical_tag(dst_raw)
-    direction = "c->s" if "client" in src_logical or "pclient" in src_logical else "s->c"
+    src_logical, dst_logical = key.split("_to_")
+    direction = "c->s" if "client" in src_logical else "s->c"
 
     for e_src, e_dst, e_dir, e_data in entries:
         if e_dir == direction and e_src == src_logical and e_dst == dst_logical:
@@ -289,4 +276,4 @@ with open(eval_file, "a", newline="") as f:
     writer = csv.writer(f)
     writer.writerow(row)
 
-print(f"Appended result for {question_id}.{testcase_id} to {eval_file}")
+#print(f"Appended result for {question_id}.{testcase_id} to {eval_file}")

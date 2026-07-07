@@ -7,9 +7,10 @@ const submissionSchema = new mongoose.Schema({
   // module: { type: String, required: true },
   sourceCode: { type: Object },
   language: { type: String }, // required: true ?
-  // passedCount: { type: Number, required: true },
+  passedCount: { type: Number, default: 0 },
   totalTestCases: { type: Number },
   evaluationResults: { type: [Object] },
+  evalError: { type: String },
   score: { type: Number},
   isBestSubmission: { type: Boolean, default: false }
 }, {collection: 'submissions', timestamps: true });

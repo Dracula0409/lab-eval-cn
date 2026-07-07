@@ -53,7 +53,6 @@ ${evalScriptBody || "echo 'No evalScript defined for this question'"}
 
 /**
  * Parse {studentId}_evaluated.csv rows produced by new_evaluation.py.
- * Does not assign marks — communication check only.
  */
 export function parseEvaluatedCsv(csvContent, studentId) {
   if (!csvContent?.trim()) return [];
@@ -87,9 +86,60 @@ export function parseEvaluatedCsv(csvContent, studentId) {
   return results;
 }
 
+/**
+ * Parse {studentId}_conn.csv — connection establishment checks.
+ * e.g. server1,listen,correct
+ */
+export function parseConnCsv(csvContent) {
+  if (!csvContent?.trim()) return [];
+
+  return csvContent
+    .trim()
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => {
+      const cols = line.split(",").map((c) => c.trim());
+      return {
+        entity: cols[0] || "",
+        peer: cols[1] || "",
+        state: cols[2] || "",
+        verdict: cols[3] || "wrong",
+        passed: cols[3] === "correct",
+      };
+    });
+}
+
+/**
+ * Parse {studentId}_status.csv — persistence / status checks.
+ */
+export function parseStatusCsv(csvContent) {
+  if (!csvContent?.trim()) return [];
+
+  return csvContent
+    .trim()
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => {
+      const cols = line.split(",").map((c) => c.trim());
+      return {
+        raw: line,
+        cols,
+        passed: cols.some((c) => c === "correct" || c === "ok"),
+      };
+    });
+}
+
+/** Strip q1. prefix for display: q1.testcase1 -> testcase1 */
+export function shortTestcaseName(fullRef) {
+  if (!fullRef) return "";
+  const dot = fullRef.indexOf(".");
+  return dot >= 0 ? fullRef.slice(dot + 1) : fullRef;
+}
+
 export function toApiResults(communicationResults) {
   return communicationResults.map((tc) => ({
-    name: tc.testcase,
+    name: shortTestcaseName(tc.testcase),
+    fullName: tc.testcase,
     passed: tc.allCorrect,
     pairs: tc.pairs,
     output: tc.pairs

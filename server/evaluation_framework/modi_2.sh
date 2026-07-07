@@ -9,10 +9,10 @@
         > ack_${Qi}.log
         > data_${Qi}.log
         > dhead_${Qi}.log
-	    > hex_transfer.log
-	    > flags.log
+	> hex_transfer.log
+	> flags.log
 
-	#printf "protocol $PROTOCOL"
+	#printf "\nprotocol $PROTOCOL\n\n"
 
 	hcount=0
         length=0
@@ -46,10 +46,10 @@
                                   echo "$line" | awk '{print $3,$5,$7}' >> flags.log
                         fi
 
-			#printf "|||${line}|||"
-                        if [[ $length == "0" ]];then
+			#printf "|||${line}|||\n"
+                        if [[ "$length" == "0" ]];then
                                 #printf "GOT LENGTH 0"
-                                length=$(  echo $line | awk '{print $NF}')
+                                length="$(echo $line | awk '{print $NF}')"
                                 previous_meta=$line
 				if [[  $previous_line == "" ]];then
                                         continue
@@ -85,7 +85,7 @@
 					
 			done <<< "$previous_line"
 
-			  echo "$net_hex" >> hex.log
+			echo "$net_hex" >> hex.log
 
 			size=${#net_hex}
 			data=${net_hex:$((size-(2*length)))}
@@ -94,13 +94,13 @@
 			tto=$(  echo "$previous_meta" | awk '{print $5}')
 
 
-                          echo "${tfrom},${tto},${length},$data" >> hex_transfer.log
-                          echo "$previous_meta" >> dhead_${Qi}.log
+                        echo "${tfrom},${tto},${length},$data" >> hex_transfer.log
+                        echo "$previous_meta" >> dhead_${Qi}.log
 			echo "$previous_line" >> ack_${Qi}.log
-                        length=$(  echo $line | awk '{print $NF}')
+                        length="$(  echo $line | awk '{print $NF}')"
 
 			net_hex=""
-                        previous_line=""              
+        	        previous_line=""              
 			previous_meta=$line
 			continue
                 fi
@@ -113,7 +113,7 @@
 
 
 
-	if [[ $length == 0 ]];then
+	if [[ "$length" == "0" ]];then
 		 	echo "$previous_line" >> ack_${Qi}.log
 	else
 
@@ -134,6 +134,7 @@ do
                          continue
 		fi
 		net_hex+="$hex_word"
+		#printf "(net hex)<<<$net_hex >>>(net hex)\n"
 		((hcount++))
 	done
  
@@ -149,5 +150,6 @@ done <<< "$previous_line"
                   echo "${tfrom},${tto},${length},$data" >> hex_transfer.log
 		  echo "$previous_line" >> ack_${Qi}.log
                	  echo "$previous_meta" >> dhead_${Qi}.log
+                  echo "$data" >> data_${Qi}.log
 	fi
 

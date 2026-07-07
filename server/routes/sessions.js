@@ -5,8 +5,41 @@ import { CNModule } from '../models/Module.js';
 import User from '../models/User.js';
 import Course from '../models/Course.js';
 import { protect, authorize } from '../middleware/auth.js';
+import { ensureSessionContainer } from '../controllers/sshController.js';
 
 const router = express.Router();
+
+// Student self-service login: spin up (or reuse) the container for this
+// userId and record the studentName, no password required for now.
+router.post('/init', async (req, res) => {
+  try {
+    const { userId, studentName } = req.body;
+
+    if (!userId || !studentName) {
+      return res.status(400).json({ error: 'userId and studentName are required' });
+    }
+
+    const { sessionId, containerName, sshPort } = await ensureSessionContainer(userId);
+
+    // Persist the student's display name against the session record.
+    await Session.updateOne(
+      { userId, sessionId },
+      { $set: { studentName } }
+    );
+
+    res.status(200).json({
+      success: true,
+      sessionId,
+      containerName,
+      sshPort,
+      userId,
+      studentName,
+    });
+  } catch (err) {
+    console.error('[API] /sessions/init error:', err);
+    res.status(500).json({ error: err.message || 'Failed to start lab session' });
+  }
+});
 
 // Get all active sessions
 router.get('/active', async (req, res) => {

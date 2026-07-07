@@ -29,7 +29,7 @@ function START_TCPDUMP()
 	### REMEMBER THE NAMES OF THE FILES THEY ARE ASSIGNING
 	 
 	> $3
-	tcpdump --immediate-mode -i lo $1 "port $2" -nn -A -w "$3" &
+	tcpdump --immediate-mode -i lo $1 "port $2" -nn -A -w "$3" 2>/dev/null &
 	TCPDUMP_PID=$!
 	#=- echo "the pid of tcpdump is : $TCPDUMP_PID"
 	
@@ -47,13 +47,13 @@ function FLUSH_TCPDUMP()
 #	 It is the responsibility of the programer to make sure the 
 #	 programs running in the coproc send data cronologiacally. 
 
-	>transfer.log
+		>transfer.log
         >transfer.hex
 
         sleep 1
         #=- echo "parsing contents of $TCPDUMP_FILENAME  TO transfer.log && hex_transfer.log  "
-        tcpdump -nn -A -r $TCPDUMP_FILENAME > transfer.log
-        tcpdump -nn -r $TCPDUMP_FILENAME -xx > transfer.hex
+        tcpdump -nn -A -r $TCPDUMP_FILENAME > transfer.log  2>/dev/null
+        tcpdump -nn -r $TCPDUMP_FILENAME -xx > transfer.hex 2>/dev/null
 }
 
 function END_TCPDUMP()
@@ -66,15 +66,15 @@ function END_TCPDUMP()
 	fi
 
 	#killing the tcpdump process
-	kill -2 $TCPDUMP_PID
+	kill -2 $TCPDUMP_PID 2>/dev/null
 	
 	>transfer.log
 	>transfer.hex
 
 	sleep 3
 	#=- echo "parsing contents of $TCPDUMP_FILENAME  TO transfer.log && hex_transfer.log  "
-	tcpdump -nn -A -r $TCPDUMP_FILENAME > transfer.log
-	tcpdump -nn -r $TCPDUMP_FILENAME -xx > transfer.hex
+	tcpdump -nn -A -r $TCPDUMP_FILENAME > transfer.log  2>/dev/null
+	tcpdump -nn -r $TCPDUMP_FILENAME -xx > transfer.hex 2>/dev/null
 	
 	#=- echo "TCPDUMP KILLED SUCCESSFULLY<==="
 }
@@ -93,16 +93,14 @@ function EVALUATE()
 	fi
 
 	#=- echo "started evauating <<<<<-------------"
-	# Parse captured traffic (transfer.hex -> hex_transfer.log)
-	bash modi_2.sh "$Qi" "$1"
-	python3 new_parse.py "${Qi}" "${student_id}" 0 >/dev/null 2>&1 || true
+	bash modi_2.sh "$Qi" "$1" 
 
 	sleep 3
 	#=- echo "started evaluating and correction"
 	
 	if [[ $# -eq 2 ]];then
 
-		python3 new_evaluation.py "${student_id}" "${Qi}" "testcase$2" 
+		python3 new_evaluation.py "$student_id" "${Qi}" "testcase$2" 
 	
 	elif [[ $# -eq 3 ]];then
 		
@@ -113,6 +111,8 @@ function EVALUATE()
 			python3 new_evaluation.py "$student_id" "${Qi}" "testcase$counti"
 		done
 	fi
+
+	echo ""
 
 	#=- echo "------------>>>>> evaluation completed for the ${student_id} for the Q : ${Qi}"
 }
@@ -142,15 +142,15 @@ function CLEAR_ALL()
 		#=- echo " status of closing coproc FD $?"
 
 		# Killing the program 
-		eval "kill -2 ${programPids[$i]}"
+		eval "kill -2 ${programPids[$i]}" 2>/dev/null
 		#=- echo "status of killing the program $?"
 
 		# killing the coproc itself
-		eval "kill -2 ${coprocPids[$i]}"	
+		eval "kill -2 ${coprocPids[$i]}"  2>/dev/null
 		#=- echo "status of killing the coproc $?"
 	done	
 
-	TIME_WAIT
+	#TIME_WAIT
 
 	
 	if [[ $? -eq 1 ]];then
@@ -159,7 +159,7 @@ function CLEAR_ALL()
 	fi	
 
 	bash port_reset_Advanced.sh
-        bash reset_port_timeout.sh
+    bash reset_port_timeout.sh
 
 }
 
@@ -196,7 +196,8 @@ function RUN()
 	#  All the programs that are executed have a default coproc name
 	#  which is assigned in the name format ~ coproc_i, where i is 
 	#  the no of programs executed in the sequence. The output of each 
-	#  program is stored in a file named in th format out_i.
+	#  program is stored in a file named in th format 
+	
 
 	#=- echo "--->running the program $1"
 	
@@ -255,7 +256,8 @@ function INPUT()
 		return 0
 	
 	else
-		echo "FILE $2 EXISTS"
+		echo ""
+		#echo "FILE $2 EXISTS"
 	fi
 
 	allocatedFDs=$(ls /proc/$$/fd/)
@@ -424,7 +426,7 @@ do
 	
 	if [[ "${status[$5]}" == "$conn_status" ]];then
 		builtin echo "$1 $2 $5" >> connectionstatus.log
-		builtin echo "$local_address is has a { $5 } connection to $remote_address"
+		builtin echo -e "$local_address is has a { $5 } connection to $remote_address"
 		break  #<<<<<<<<<<<<<<  this is only A TEMPRORY SOLUTION
 	else 
 		builtin	echo "$1 $2 NO" >> connectionstatus.log
@@ -470,17 +472,19 @@ function COMPILE_RUN()
                 exit 101
         fi
 
-        echo "COMPILED $1 SUCCESSFULLY<==="
+        echo -e "\033[47m\033[30mCOMPILED $1 SUCCESSFULLY\033[0m"
 
 ### setting  the port
 
 	#=- echo "settings the port $3 for the program $1"
-
-	if [[ $# == 4 ]];then
-		bash port_set_Advanced.sh $3 $4
-	elif [[ $# == 3 ]];then
-		 bash port_set_Advanced.sh $3 $3
-	fi
+#  we do not need this as the ports are being set by the students in their
+#  code. This is a heavy to the students but okay.
+# 
+# 	if [[ $# == 4 ]];then
+# 		bash port_set_Advanced.sh $3 $4
+# 	elif [[ $# == 3 ]];then
+# 		 bash port_set_Advanced.sh $3 $3
+# 	fi
 
 
 ### Now running the program
@@ -489,7 +493,7 @@ function COMPILE_RUN()
 	### Now running the file
         coproc "coproc_${PROGRAMS_RAN_COUNT}" { ./$2 > out_${PROGRAMS_RAN_COUNT}; }
 
-	echo "[ EXIT CODE OF COPROC_${PROGRAMS_RAN_COUNT} : $? "
+		#echo "[ EXIT CODE OF COPROC_${PROGRAMS_RAN_COUNT} : $? ]"
 
 
         ### Assigning the coproc Pids to associative arrays
@@ -500,8 +504,8 @@ function COMPILE_RUN()
         #=- echo "names---)${!coprocPids[@]}"
 
         ### Assigning the programs pids to the associative arrays
-	tempchild=$(pgrep -P "${!temp}")
-	#=- echo "sub process of : ${!temp} is : $tempchild"
+		tempchild=$(pgrep -P "${!temp}")
+		#=- echo "sub process of : ${!temp} is : $tempchild"
 
         programPids["$2"]=$tempchild
         #=- echo "program PIDS ---)${programPids[@]}"
@@ -513,7 +517,7 @@ function COMPILE_RUN()
         #=- echo "coprocFDS ---) ${coprocFDs[@]}"
 
 
-	temp="coproc_${PROGRAMS_RAN_COUNT}[0]"
+	    temp="coproc_${PROGRAMS_RAN_COUNT}[0]"
         coprocReadFDs["$2"]=${!temp}
         #=- echo "coprocFDS ---) ${coprocReadFDs[@]}"
 
@@ -521,8 +525,8 @@ function COMPILE_RUN()
 
         ((PROGRAMS_RAN_COUNT++))
 
-#	ls -l /proc/$$/fd/
-        #=- echo "-->>>>$PROGRAMS_RAN_COUNT"
+#		ls -l /proc/$$/fd/
+        #echo -e "--->>>( $PROGRAMS_RAN_COUNT )\n"
 
 	sleep 1
 }
@@ -534,7 +538,7 @@ function WAIT_PORT()
 	#=- echo "|	status PORT_AVAIL:{ $s }	|" 
 	if [[ "$s" == "01" || "$s" == "0A" ]];then
 		
-		print ">>> \033[36mTHE PORT:$2 IS ALREADY IN USE\033[0m <<<"
+		echo -e ">>> \033[36mTHE PORT:$2 IS ALREADY IN USE\033[0m <<<"
 		CLEAR_ALL
 		exit 301
 	elif [[ "$s" == "05" || "$s" == "06" ]];then
@@ -592,6 +596,7 @@ function WAIT_PORT()
 		#CLEAR_ALL
         #exit 301
 	fi
+	
 	bash reduce_port_timeout.sh
 
 }
@@ -601,7 +606,7 @@ function ISALIVE()
 	# $1 name of the program
 	#
 
-	kill -0 ${programPids["$1"]}
+	kill -0 ${programPids["$1"]} 2>/dev/null
 	
 	kill_status=$?
 	#=- echo "kill_status : $kill_status"

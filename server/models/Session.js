@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 
 const sessionSchema = new mongoose.Schema({
   userId: { type: String, required: true },
+  studentName: { type: String },
   sessionId: { type: String, required: true },
   containerName: { type: String, required: true },
   sshPort: { type: Number, required: true },

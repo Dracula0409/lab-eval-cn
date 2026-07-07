@@ -105,4 +105,4 @@ with open(f"{student_id}_conn.csv", "a", newline="") as f:
     writer = csv.writer(f)
     writer.writerows(rows_to_append)
 
-print(f"{expected_state} state check results appended to {student_id}_conn.csv")
+#print(f"{expected_state} state check results appended to {student_id}_conn.csv")

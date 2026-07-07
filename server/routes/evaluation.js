@@ -7,7 +7,7 @@ const router = Router();
 async function handleEvaluation(req, res, runType) {
   try {
     const {
-      userId = 'testuser123',
+      userId = '',
       studentName = '',
       sessionId,
       moduleId,
