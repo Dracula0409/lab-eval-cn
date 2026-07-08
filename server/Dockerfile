@@ -88,14 +88,14 @@ RUN for user in labuser networklab; do \
     echo "export TERM=xterm-256color" >> /home/$user/.bashrc && \
     echo "export LANG=C.UTF-8" >> /home/$user/.bashrc && \
     echo "export LC_ALL=C.UTF-8" >> /home/$user/.bashrc && \
-    echo "alias sudo='echo Permission denied'" >> /home/$user/.bashrc && \
-    echo "alias su='echo Permission denied'" >> /home/$user/.bashrc && \
-    echo "alias chmod='echo Permission denied'" >> /home/$user/.bashrc && \
-    echo "alias chown='echo Permission denied'" >> /home/$user/.bashrc && \
-    echo "alias who='echo Permission denied'" >> /home/$user/.bashrc && \
-    echo "alias which='echo Permission denied'" >> /home/$user/.bashrc && \
-    echo "alias users='echo Permission denied'" >> /home/$user/.bashrc && \
-    echo "alias top='echo Permission denied'" >> /home/$user/.bashrc && \
+    #echo "alias sudo='echo Permission denied'" >> /home/$user/.bashrc && \
+    #echo "alias su='echo Permission denied'" >> /home/$user/.bashrc && \
+    #echo "alias chmod='echo Permission denied'" >> /home/$user/.bashrc && \
+    #echo "alias chown='echo Permission denied'" >> /home/$user/.bashrc && \
+    #echo "alias who='echo Permission denied'" >> /home/$user/.bashrc && \
+    #echo "alias which='echo Permission denied'" >> /home/$user/.bashrc && \
+    #echo "alias users='echo Permission denied'" >> /home/$user/.bashrc && \
+    #echo "alias top='echo Permission denied'" >> /home/$user/.bashrc && \
     chown root:root /home/$user/.bashrc && \
     chmod 444 /home/$user/.bashrc; \
     done

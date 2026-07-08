@@ -6,6 +6,7 @@ const router = Router();
 
 async function handleEvaluation(req, res, runType) {
   try {
+    console.log("1. handleEvaluation entered");
     const {
       userId = '',
       studentName = '',
@@ -26,6 +27,8 @@ async function handleEvaluation(req, res, runType) {
       return res.status(400).json({ error: 'tagPaths is required (tag -> absolute file path)' });
     }
 
+    console.log("2. before runAndEvaluate");
+
     const result = await runAndEvaluate({
       userId,
       studentName,
@@ -37,7 +40,9 @@ async function handleEvaluation(req, res, runType) {
       runType,
     });
 
+    console.log("3. after runAndEvaluate");
     res.json({ success: true, ...result });
+    console.log("4. response sent");
   } catch (err) {
     console.error(`[API] evaluation/${runType} error:`, err);
     res.status(500).json({ error: err.message });

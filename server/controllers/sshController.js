@@ -368,14 +368,40 @@ function uploadStringViaConn(conn, remotePath, content) {
 }
 
 function execViaConn(conn, command) {
+  console.log("EXEC START:", command);
+
   return new Promise((resolve, reject) => {
     let stdout = '';
     let stderr = '';
+
     conn.exec(command, (err, stream) => {
-      if (err) return reject(err);
-      stream.on('data', (d) => { stdout += d.toString(); });
-      stream.stderr.on('data', (d) => { stderr += d.toString(); });
-      stream.on('close', (code) => resolve({ stdout, stderr, exitCode: code }));
+      if (err) {
+        console.log("EXEC ERROR:", err);
+        return reject(err);
+      }
+
+      console.log("CHANNEL OPEN");
+
+      stream.on('data', (d) => {
+        stdout += d.toString();
+      });
+
+      stream.stderr.on('data', (d) => {
+        stderr += d.toString();
+      });
+
+      stream.on('exit', (code) => {
+        console.log("EXIT:", code);
+      });
+
+      stream.on('end', () => {
+        console.log("END");
+      });
+
+      stream.on('close', (code) => {
+        console.log("CLOSE:", code);
+        resolve({ stdout, stderr, exitCode: code });
+      });
     });
   });
 }
@@ -394,6 +420,7 @@ export async function runAndEvaluate({
   sourceFiles = {},
   runType = 'evaluate',
 }) {
+  console.log("========== ENTERED runAndEvaluate ==========");
   await ensureSessionContainer(userId);
   const session = await Session.findOne({ userId }).sort({ createdAt: -1 });
   if (!session) throw new Error('No active session for user');
@@ -406,18 +433,23 @@ export async function runAndEvaluate({
   const evalScriptBody = question.evalScript || '';
   const inputContent = question.input || '';
 
-  const niceScript = buildNiceScript({ questionKey, evalScriptBody, tagPaths });
+  const niceScript = buildNiceScript({ evalScriptBody });
   const testcasesJson = buildTestcasesJson(questionKey, testcases);
   const studentSh = buildStudentSh(userId, studentName);
 
   const conn = await createNetworklabConnection(session.sshPort);
 
   try {
+    console.log("A writing nice.sh");
     await uploadStringViaConn(conn, `${EVAL_DIR}/nice.sh`, niceScript);
+    console.log("B writing testcase");
     await uploadStringViaConn(conn, `${EVAL_DIR}/testcases.json`, testcasesJson);
+    console.log("C upload input");
     await uploadStringViaConn(conn, `${EVAL_DIR}/input`, inputContent);
+    console.log("D upload student");
     await uploadStringViaConn(conn, `${EVAL_DIR}/student.sh`, studentSh);
 
+    console.log("E creating symlinks");
     for (const filePath of Object.values(tagPaths)) {
       const base = path.posix.basename(filePath);
       await execViaConn(
@@ -426,23 +458,37 @@ export async function runAndEvaluate({
       );
     }
 
+    console.log("F chmod");
     await execViaConn(conn, `chmod +x ${EVAL_DIR}/nice.sh`);
 
     const fileArgs = Object.values(tagPaths)
       .map((p) => `"${p}"`)
       .join(' ');
 
+    console.log("G running nice.sh");
     const { stdout, stderr, exitCode } = await execViaConn(
       conn,
-      `cd ${EVAL_DIR} && bash nice.sh ${fileArgs}`
+      `cd ${EVAL_DIR} && bash nice.sh ${fileArgs}; echo "__DONE__"; exit`
     );
 
+    console.log("H nice.sh finished");
+    console.log("stdout:");
+    console.log(stdout);
+
+    console.log("stderr:");
+    console.log(stderr);
+
+    console.log("exitCode:", exitCode);
     const csvPath = `${EVAL_DIR}/${userId}_evaluated.csv`;
+    console.log("I reading csv");
     const { stdout: csvContent } = await execViaConn(conn, `cat ${csvPath} 2>/dev/null || true`);
 
+    console.log("J csv read");
     const communicationResults = parseEvaluatedCsv(csvContent, userId);
+    console.log("K parsing");
     const results = toApiResults(communicationResults);
 
+    console.log("L saving mongodb");
     const runDoc = await EvaluationRun.create({
       userId,
       studentName,
@@ -460,6 +506,7 @@ export async function runAndEvaluate({
       exitCode,
     });
 
+    console.log("M returning");
     return {
       runId: runDoc._id,
       results,

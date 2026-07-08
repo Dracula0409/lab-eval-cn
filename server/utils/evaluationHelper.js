@@ -19,36 +19,8 @@ export function buildTagsSh(tagPaths = {}) {
   return lines.join("\n") + (lines.length ? "\n" : "");
 }
 
-export function buildNiceScript({ questionKey, evalScriptBody, tagPaths }) {
-  const tagExports = buildTagsSh(tagPaths);
-
-  return `#!/bin/bash
-set -e
-cd ${EVAL_DIR}
-
-declare -i PROGRAMS_RAN_COUNT=0
-declare -A coprocPids
-declare -A coprocFDs
-declare -A coprocReadFDs
-declare -A programPids
-declare -A Assigned_Ports
-
-Qi="${questionKey}"
-> connectionstatus.log
-> unitsep.log
-
-${tagExports}
-source ./fun.sh
-source ./clientPorts.sh
-source ./serverPorts.sh
-source ./student.sh
-
-> "\${student_id}_conn.csv"
-> "\${student_id}_status.csv"
-> "\${student_id}_evaluated.csv"
-
-${evalScriptBody || "echo 'No evalScript defined for this question'"}
-`;
+export function buildNiceScript({ evalScriptBody }) {
+  return evalScriptBody || "echo 'No evalScript defined for this question'";
 }
 
 /**

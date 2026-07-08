@@ -45,6 +45,9 @@ export async function createContainerForUser(userId) {
         await runInContainer(existingContainer, `
         setfacl -m u:networklab:rwx /home/labuser
         setfacl -d -m u:networklab:rwx /home/labuser
+
+        setfacl -m u:tcpdump:rwx /home/networklab
+        setfacl -d -m u:tcpdump:rwx /home/networklab
         `);
         console.log(`[Dockerode] Restarted container ${containerName}`);
       } catch (err) {
@@ -93,6 +96,9 @@ export async function createContainerForUser(userId) {
   await runInContainer(container, `
   setfacl -m u:networklab:rwx /home/labuser
   setfacl -d -m u:networklab:rwx /home/labuser
+
+  setfacl -m u:tcpdump:rwx /home/networklab
+  setfacl -d -m u:tcpdump:rwx /home/networklab
   `);
   console.log(`[Dockerode] Started new container ${containerName} on port ${sshPort}`);
 
