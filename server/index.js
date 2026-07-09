@@ -17,7 +17,27 @@ const app = express();
 const server = http.createServer(app);
 
 // Middlewares
-app.use(cors());
+const allowedOrigins = [
+  "http://localhost:5173", 
+  "http://10.16.16.104:5173",
+  //"http://10.7.103.226:5173",
+  //"http://10.5.12.254:5173",
+  //"http://192.168.1.200:5173",
+  //"http://10.21.68.19:5173"     //library
+];
+
+app.use(cors({
+  origin : (origin, callback) => {
+    if(!origin || allowedOrigins.includes(origin)){
+      callback(null, true);
+    }
+    else{
+      callback(new Error("Not Allowed by CORS."));
+    }
+  },
+  credentials: true, 
+}));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -48,6 +68,6 @@ process.on('SIGTERM', async () => {
 
 const PORT = process.env.PORT || 5001;
 
-server.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server running at http://0.0.0.0:${PORT}`);
 });

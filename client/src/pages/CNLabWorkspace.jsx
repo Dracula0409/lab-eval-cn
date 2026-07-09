@@ -10,6 +10,7 @@ import ResizeHandle from '../components/shared/ResizeHandle';
 import { useIsMobile } from '../components/utils/useIsMobile';
 import { summarizeResults } from '../components/utils/testcaseHelper';
 import { InformationCircleIcon } from '@heroicons/react/24/outline';
+import { API_BASE } from '../config';
 
 // Create a hardcoded session ID for testing
 const TEST_SESSION_ID = "lab_session_" + Math.random().toString(36).substring(2, 15);
@@ -109,7 +110,7 @@ export default function CNLabWorkspace() {
           console.log('Found module ID in localStorage:', moduleId);
           
           // Fetch the module directly using the module ID
-          const response = await axios.get(`http://localhost:5001/api/modules/${moduleId}`);
+          const response = await axios.get(`${API_BASE}/api/modules/${moduleId}`);
           
           if (response.data) {
             const moduleData = response.data;
@@ -129,7 +130,7 @@ export default function CNLabWorkspace() {
             
             // If questions are just IDs, fetch the full question data
             if (moduleData.questions.length > 0 && typeof moduleData.questions[0] === 'string') {
-              const questionsResponse = await axios.get(`http://localhost:5001/api/modules/${moduleId}/questions`);
+              const questionsResponse = await axios.get(`${API_BASE}/api/modules/${moduleId}/questions`);
               questionsData = questionsResponse.data;
             }
             
@@ -300,7 +301,7 @@ export default function CNLabWorkspace() {
         let code = f.precode || '';
 
         try {
-          const response = await axios.get('http://localhost:5001/api/file/read-file', {
+          const response = await axios.get(`${API_BASE}/api/file/read-file`, {
             params: {
               cwd: LABUSER_HOME,
               filename: f.name,
@@ -412,7 +413,7 @@ export default function CNLabWorkspace() {
 
   const openFile = async () => {
     try {
-      const response = await axios.get('http://localhost:5001/api/file/list-files', {
+      const response = await axios.get(`${API_BASE}/api/file/list-files`, {
         params: { cwd: currentWorkingDir,
                   userId: getCurrentUser()
          }
@@ -437,7 +438,7 @@ export default function CNLabWorkspace() {
     }
 
     try {
-      const res = await axios.get('http://localhost:5001/api/file/read-file', {
+      const res = await axios.get(`${API_BASE}/api/file/read-file`, {
         params: { filename: selected, cwd: currentWorkingDir }
       });
 
@@ -516,7 +517,7 @@ export default function CNLabWorkspace() {
         code: file.code
       };
 
-      await fetch('http://localhost:5001/api/save-file', {
+      await fetch(`${API_BASE}/api/save-file`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -565,7 +566,7 @@ export default function CNLabWorkspace() {
 
     // Notify backend to rename inside container
     try {
-      await fetch('http://localhost:5001/api/rename-file', {
+      await fetch(`${API_BASE}/api/rename-file`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -608,11 +609,11 @@ export default function CNLabWorkspace() {
 
     // Notify backend to rename file inside container
     try {
-      await fetch('http://localhost:5001/api/rename-file', {
+      await fetch(`${API_BASE}/api/rename-file`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: 'testuser123',
+          userId: getCurrentUser(),
           oldPath,
           newPath
         })
@@ -640,7 +641,7 @@ export default function CNLabWorkspace() {
       const filteredFiles = files.filter(f => requiredPaths.includes(f.path));
 
       for (const file of filteredFiles) {
-        await axios.post('http://localhost:5001/api/save-file', {
+        await axios.post(`${API_BASE}/api/save-file`, {
           userId: getCurrentUser(),
           filename: file.name,
           filePath: file.path,
@@ -651,7 +652,7 @@ export default function CNLabWorkspace() {
       const tagPaths = { ...tagToFileMap };
       const sourceFiles = Object.fromEntries(filteredFiles.map(f => [f.name, f.code]));
 
-      const response = await axios.post('http://localhost:5001/api/evaluation/run', {
+      const response = await axios.post(`${API_BASE}/api/evaluation/run`, {
         userId: getCurrentUser(),
         studentName: getStudentName(),
         sessionId: getCurrentLabSession(),
@@ -712,7 +713,7 @@ export default function CNLabWorkspace() {
       const filteredFiles = files.filter(f => requiredPaths.includes(f.path));
 
       for (const file of filteredFiles) {
-        await axios.post('http://localhost:5001/api/save-file', {
+        await axios.post(`${API_BASE}/api/save-file`, {
           userId: getCurrentUser(),
           filename: file.name,
           filePath: file.path,
@@ -723,7 +724,7 @@ export default function CNLabWorkspace() {
       const tagPaths = { ...tagToFileMap };
       const sourceFiles = Object.fromEntries(filteredFiles.map(f => [f.name, f.code]));
 
-      const evalRes = await axios.post('http://localhost:5001/api/evaluation/submit', {
+      const evalRes = await axios.post(`${API_BASE}/api/evaluation/submit`, {
         userId: getCurrentUser(),
         studentName: getStudentName(),
         sessionId: getCurrentLabSession(),
@@ -746,7 +747,7 @@ export default function CNLabWorkspace() {
       const correctCount = results.length > 0 ? passedFromResults : 0;
       const totalCount = results.length > 0 ? results.length : testcaseCount;
 
-      const submitDbRes = await fetch('http://localhost:5001/api/submission/db', {
+      const submitDbRes = await fetch(`${API_BASE}/api/submission/db`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

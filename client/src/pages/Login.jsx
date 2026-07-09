@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import axios from 'axios';
+import { API_BASE } from '../config';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -23,7 +24,7 @@ export default function Login() {
 
     setLoading(true);
     try {
-      const res = await axios.post('http://localhost:5001/api/sessions/init', {
+      const res = await axios.post(`${API_BASE}/api/sessions/init`, {
         userId: trimmedId,
         studentName: trimmedName,
       });

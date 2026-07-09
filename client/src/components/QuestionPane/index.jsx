@@ -3,6 +3,7 @@ import Submissions from './Submissions';
 import TestSelector from './TestSelector';
 import QuestionTabs from './QuestionTabs';
 import { processCodeBlocks } from '../utils/codeBlockHelper';
+import { API_BASE } from '../../config';
 import { 
   XMarkIcon,
   AcademicCapIcon,
@@ -103,7 +104,7 @@ export default function QuestionPane({
             {/* Render separate image if question.image is present */}
             {question.image && (
               <img
-                src={question.image.startsWith('http') ? question.image : `http://localhost:5001${question.image}`}
+                src={question.image.startsWith('http') ? question.image : `${API_BASE}${question.image}`}
                 alt="Question Illustration"
                 className="mt-4 rounded-lg border border-gray-200 shadow-sm max-w-full"
                 style={{ maxHeight: 320 }}

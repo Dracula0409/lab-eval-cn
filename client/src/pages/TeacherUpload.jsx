@@ -4,6 +4,7 @@ import axios from 'axios';
 import Header from '../components/Header';
 import { PlusIcon } from '@heroicons/react/24/outline';
 import { TabButton } from '../components/FormComponents';
+import { API_BASE } from '../config';
 import { 
   SendModuleModal, 
   ModuleTable, 
@@ -101,7 +102,7 @@ export default function TeacherUpload() {
 
   const fetchQuestions = async () => {
     try {
-      const response = await axios.get('http://localhost:5001/api/questions');
+      const response = await axios.get(`${API_BASE}/api/questions`);
       setQuestions(response.data);
     } catch (err) {
       console.error('Error fetching questions:', err);
@@ -110,7 +111,7 @@ export default function TeacherUpload() {
   
   const fetchModules = async () => {
     try {
-      const response = await axios.get('http://localhost:5001/api/modules');
+      const response = await axios.get(`${API_BASE}/api/modules`);
       setModules(response.data);
     } catch (err) {
       console.error('Error fetching modules:', err);
@@ -120,7 +121,7 @@ export default function TeacherUpload() {
   const fetchSessions = async () => {
     try {
       // Fetch active sessions from the backend
-      const response = await axios.get('http://localhost:5001/api/sessions/active');
+      const response = await axios.get(`${API_BASE}/api/sessions/active`);
       
       if (response.data && response.data.length > 0) {
         setSessions(response.data);
@@ -221,7 +222,7 @@ export default function TeacherUpload() {
         // Upload the image
         const formData = new FormData();
         formData.append('image', file);
-        const response = await axios.post('http://localhost:5001/api/questions/upload-image', formData);
+        const response = await axios.post(`${API_BASE}/api/questions/upload-image`, formData);
         
         // Replace the base64 string with the returned URL
         processedDescription = processedDescription.replace(fullMatch, `src="${response.data.url}"`);
@@ -247,10 +248,10 @@ export default function TeacherUpload() {
       delete questionData.clientDelay;
 
       if (editingQuestionId) {
-        await axios.put(`http://localhost:5001/api/questions/${editingQuestionId}`, questionData);
+        await axios.put(`${API_BASE}/api/questions/${editingQuestionId}`, questionData);
         setMessage('Question updated successfully!');
       } else {
-        await axios.post('http://localhost:5001/api/questions', questionData);
+        await axios.post(`${API_BASE}/api/questions`, questionData);
         setMessage('Question uploaded successfully!');
       }
 
@@ -279,7 +280,7 @@ export default function TeacherUpload() {
     if (!confirm('Are you sure you want to delete this question?')) return;
     
     try {
-      await axios.delete(`http://localhost:5001/api/questions/${id}`);
+      await axios.delete(`${API_BASE}/api/questions/${id}`);
       fetchQuestions();
     } catch (err) {
       alert(`Error deleting question: ${err.message}`);
@@ -328,7 +329,7 @@ export default function TeacherUpload() {
           // Upload the image
           const formData = new FormData();
           formData.append('image', file);
-          const response = await axios.post('http://localhost:5001/api/questions/upload-image', formData);
+          const response = await axios.post(`${API_BASE}/api/questions/upload-image`, formData);
           
           // Replace the base64 string with the returned URL
           processedDescription = processedDescription.replace(fullMatch, `<img src="${response.data.url}" alt="Question image" />`);
@@ -344,7 +345,7 @@ export default function TeacherUpload() {
       }));
       
       // Use the bulk upload endpoint to create all questions at once
-      const response = await axios.post('http://localhost:5001/api/questions/bulk', processedQuestions);
+      const response = await axios.post(`${API_BASE}/api/questions/bulk`, processedQuestions);
       const { results } = response.data;
       
       // Update status
@@ -421,11 +422,11 @@ export default function TeacherUpload() {
       let response;
       if (editingModuleId) {
         // Update existing module
-        response = await axios.put(`http://localhost:5001/api/modules/${editingModuleId}`, payload);
+        response = await axios.put(`${API_BASE}/api/modules/${editingModuleId}`, payload);
         setMessage("Module updated successfully!");
       } else {
         // Create new module
-        response = await axios.post('http://localhost:5001/api/modules', payload);
+        response = await axios.post(`${API_BASE}/api/modules`, payload);
         setMessage("Module created successfully!");
       }
       
@@ -471,7 +472,7 @@ export default function TeacherUpload() {
     if (!confirm('Are you sure you want to delete this module?')) return;
     
     try {
-      await axios.delete(`http://localhost:5001/api/modules/${id}`);
+      await axios.delete(`${API_BASE}/api/modules/${id}`);
       fetchModules();
       setMessage('Module deleted successfully!');
       setMessageType('success');
@@ -507,7 +508,7 @@ export default function TeacherUpload() {
       const testSessionId = "lab_session_test";
       
       // Make the API request to assign the module to the test session
-      const response = await axios.post(`http://localhost:5001/api/modules/${selectedModuleToSend}/assign-to-test-session`, {});
+      const response = await axios.post(`${API_BASE}/api/modules/${selectedModuleToSend}/assign-to-test-session`, {});
       
       if (response.data && response.data.success) {
         const moduleInfo = modules.find(m => m._id === selectedModuleToSend);
