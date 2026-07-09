@@ -413,7 +413,9 @@ export default function CNLabWorkspace() {
   const openFile = async () => {
     try {
       const response = await axios.get('http://localhost:5001/api/file/list-files', {
-        params: { cwd: currentWorkingDir }
+        params: { cwd: currentWorkingDir,
+                  userId: getCurrentUser()
+         }
       });
       setAvailableFiles(response.data.files);
       setShowFileModal(true); // show modal
@@ -492,6 +494,7 @@ export default function CNLabWorkspace() {
       window.dispatchEvent(new CustomEvent('run-file-in-terminal', {
         detail: {
           code: activeFile.code,
+          userId: getCurrentUser(),
           filename: activeFile.name,
           filePath: fullPath,
           language: activeFile.language || language
@@ -507,7 +510,7 @@ export default function CNLabWorkspace() {
     try {
       setSaveStatus('saving');
       const payload = {
-        //userId: 'jwt-later',
+        userId: getCurrentUser(),
         filename: file.name,
         filePath: file.path,
         code: file.code
@@ -638,6 +641,7 @@ export default function CNLabWorkspace() {
 
       for (const file of filteredFiles) {
         await axios.post('http://localhost:5001/api/save-file', {
+          userId: getCurrentUser(),
           filename: file.name,
           filePath: file.path,
           code: file.code,
@@ -709,6 +713,7 @@ export default function CNLabWorkspace() {
 
       for (const file of filteredFiles) {
         await axios.post('http://localhost:5001/api/save-file', {
+          userId: getCurrentUser(),
           filename: file.name,
           filePath: file.path,
           code: file.code,
@@ -741,12 +746,13 @@ export default function CNLabWorkspace() {
       const correctCount = results.length > 0 ? passedFromResults : 0;
       const totalCount = results.length > 0 ? results.length : testcaseCount;
 
-      await fetch('http://localhost:5001/api/submission/db', {
+      const submitDbRes = await fetch('http://localhost:5001/api/submission/db', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: getCurrentUser(),
           questionId: question.id,
+          sessionId: getCurrentLabSession(),
           module: moduleInfo?.name || 'CN Lab',
           sourceCode: sourceFiles,
           language: filteredFiles[0]?.language || 'c',
@@ -756,6 +762,11 @@ export default function CNLabWorkspace() {
           evalError: results.length === 0 ? (evalRes.data?.stderr?.trim() || null) : null,
         }),
       });
+
+      if (!submitDbRes.ok) {
+        const body = await submitDbRes.json().catch(() => ({}));
+        throw new Error(body.error || `Failed to save submission (status ${submitDbRes.status})`);
+      }
 
       const statusLabel = totalCount > 0 && correctCount === totalCount ? 'All test cases passed' : `${correctCount}/${totalCount} test cases passed`;
       setSubmissionRefreshTrigger((n) => n + 1);

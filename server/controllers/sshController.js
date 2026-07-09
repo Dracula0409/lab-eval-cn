@@ -30,6 +30,7 @@ const sessions = {}; // terminalId => { conn, stream, ws }
 
 async function createSSHConnection(userId, sshPortOverride = null) {
   const session = await Session.findOne({ userId }).sort({ createdAt: -1 });
+  console.log("[SSH] Session found:", session);
   if (!session && !sshPortOverride) throw new Error('No active session for user');
   const sshPort = sshPortOverride || session.sshPort;
 
@@ -450,25 +451,29 @@ export async function runAndEvaluate({
     await uploadStringViaConn(conn, `${EVAL_DIR}/student.sh`, studentSh);
 
     console.log("E creating symlinks");
-    for (const filePath of Object.values(tagPaths)) {
-      const base = path.posix.basename(filePath);
+    const fileArgs = [];
+
+    for (const [tag, filePath] of Object.entries(tagPaths)) {
+      const ext = path.posix.extname(filePath);      // ".c", ".py", etc.
+      const taggedName = `${tag}${ext}`;             // server1.c, client2.c
+
       await execViaConn(
         conn,
-        `ln -sf "${filePath}" "${EVAL_DIR}/${base}"`
+        `ln -sf "${filePath}" "${EVAL_DIR}/${taggedName}"`
       );
+
+      fileArgs.push(`"${EVAL_DIR}/${taggedName}"`);
     }
+
+    const args = fileArgs.join(' ');
 
     console.log("F chmod");
     await execViaConn(conn, `chmod +x ${EVAL_DIR}/nice.sh`);
 
-    const fileArgs = Object.values(tagPaths)
-      .map((p) => `"${p}"`)
-      .join(' ');
-
     console.log("G running nice.sh");
     const { stdout, stderr, exitCode } = await execViaConn(
       conn,
-      `cd ${EVAL_DIR} && bash nice.sh ${fileArgs}; echo "__DONE__"; exit`
+      `cd ${EVAL_DIR} && bash nice.sh ${args}; echo "__DONE__"; exit`
     );
 
     console.log("H nice.sh finished");

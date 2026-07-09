@@ -7,7 +7,7 @@ const router = Router();
 
 router.get('/list-files', async (req, res) => {
   try {
-    const { cwd, userId = 'testuser123' } = req.query;
+    const { cwd, userId } = req.query;
     const { containerName } = await ensureSessionContainer(userId);
     const targetPath = cwd ? `${cwd}` : `/home/labuser`;
 

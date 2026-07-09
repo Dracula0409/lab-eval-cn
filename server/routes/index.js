@@ -41,7 +41,14 @@ async function renameFileInContainer({ userId, oldPath, newPath }) {
 router.post('/save-file', async (req, res) => {
   try {
     // console.log('[API] save-file received:', req.body);
-    const { userId = 'testuser123', filename, filePath, code } = req.body;
+    const { userId, filename, filePath, code } = req.body;
+
+    if (!userId) {
+        return res.status(400).json({
+            error: "userId is required"
+        });
+    }
+
     if (!filename || !code) return res.status(400).json({ error: 'Missing filename or code' });
     console.log(filePath)
     await saveFileToContainer({ userId, filename, filePath, code });

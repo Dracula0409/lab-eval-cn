@@ -26,7 +26,7 @@ const TerminalComponent = ({
   const sessionEnded = useRef(false);
 
   // No real JWT auth yet — fall back to the test user if nobody's logged in.
-  const effectiveUserId = userId || 'testuser123';
+  const effectiveUserId = localStorage.getItem('studentId');
   const wsURL = `ws://localhost:5001/ws/ssh?userId=${encodeURIComponent(effectiveUserId)}&terminalId=${terminalId}`;
 
   //Track current Working directory
@@ -320,6 +320,7 @@ const TerminalComponent = ({
       // Save file before running
       try {
         const savePayload = {
+          userId: effectiveUserId,
           filename,
           filePath: filePath || filename,
           code
