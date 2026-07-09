@@ -64,9 +64,11 @@ router.get('/fetch', async (req, res) => {
 
 // Save submission record after evaluation
 router.post('/db', async (req, res) => {
+  console.log("========== SUBMISSION ==========");
+  console.log(req.body);
   try {
     const {
-      userId = 'testuser123',
+      userId,
       questionId,
       sourceCode,
       language,
