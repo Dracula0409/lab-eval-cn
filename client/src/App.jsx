@@ -1,6 +1,7 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import CNLabWorkspace from './pages/CNLabWorkspace';
 import TeacherUpload from './pages/TeacherUpload';
+import TeacherLogin from './pages/TeacherLogin';
 import Home from './pages/Home';
 import Login from './pages/Login';
 import './App.css';
@@ -15,6 +16,7 @@ function App() {
             <Route path="/" element={<Home />} />
             <Route path="/login" element={<Login />} />
             <Route path="/workspace" element={<CNLabWorkspace />} />
+            <Route path="/teacher-login" element={<TeacherLogin />} />
             <Route path="/teacher-upload" element={<TeacherUpload />} />
           </Routes>
         </div>

@@ -6,7 +6,7 @@ export default function Home() {
       <h1 className="text-3xl font-bold mb-4">Welcome to CN Lab Evaluation System</h1>
       <div className="space-x-4">
         <Link to="/login" className="text-indigo-600 underline">Student Login</Link>
-        <Link to="/teacher-upload" className="text-blue-600 underline">Teacher Upload</Link>
+        <Link to="/teacher-login" className="text-blue-600 underline">Teacher Upload</Link>
       </div>
     </div>
   );

@@ -11,6 +11,7 @@ import {
   ModuleForm, 
   QuestionForm 
 } from '../components/TeacherComponents';
+import { useNavigate } from 'react-router-dom';
 
 // Updated initial question including evaluation settings and matchType in testCases
 const initialQuestion = {
@@ -59,6 +60,13 @@ export default function TeacherUpload() {
   const [bulkUploadStatus, setBulkUploadStatus] = useState({ total: 0, uploaded: 0, failed: 0 });
   const [isBulkUploading, setIsBulkUploading] = useState(false);
 
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (localStorage.getItem('isTeacherLoggedIn') !== 'true') {
+      navigate('/teacher-login');
+    }
+  }, []);
   // Initialize react-hook-form for question
   const questionForm = useForm({
     defaultValues: initialQuestion
