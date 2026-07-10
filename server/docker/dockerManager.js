@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const docker = new Docker(); // Connects via Unix socket by default
-const SSH_IMAGE = process.env.SSH_IMAGE || 'lab_ssh_image';
+const SSH_IMAGE = process.env.SSH_IMAGE || 'lab-cn-image';
 
 /**
  * Generates session ID like 20150616_FN or 20250616_AN

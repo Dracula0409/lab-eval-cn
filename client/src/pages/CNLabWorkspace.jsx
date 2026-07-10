@@ -49,7 +49,7 @@ const MobileTabs = ({ activeTab, setActiveTab, tabs }) => (
 
 
 // Helper functions
-const getCurrentUser = () => localStorage.getItem('studentId') || 'testuser123';
+const getCurrentUser = () => localStorage.getItem('studentId');
 const getStudentName = () => localStorage.getItem('studentName') || getCurrentUser();
 const getCurrentDateTime = () => {
   const now = new Date();
@@ -85,6 +85,7 @@ export default function CNLabWorkspace() {
   const panelRef = useRef(null);
   const dirtyFileIdsRef = useRef(new Set());
   const fileHydrationRequestRef = useRef(0);
+  const lastLoadedModuleIdRef = useRef(null);
   // const [isSubmitted, setIsSubmitted] = useState(false);
 
   useEffect(() => {
@@ -103,101 +104,117 @@ export default function CNLabWorkspace() {
       setModuleError(null);
       
       try {
-        // Check if we have a module ID in localStorage (set by the teacher)
-        const moduleId = localStorage.getItem('currentModuleId');
-        
-        if (moduleId) {
-          console.log('Found module ID in localStorage:', moduleId);
-          
-          // Fetch the module directly using the module ID
-          const response = await axios.get(`${API_BASE}/api/modules/${moduleId}`);
-          
-          if (response.data) {
-            const moduleData = response.data;
-            
-            // Set module info
-            setModuleInfo({
-              _id: moduleData._id,
-              name: moduleData.name,
-              description: moduleData.description,
-              maxMarks: moduleData.maxMarks,
-              time: moduleData.time || "Not specified",
-              date: moduleData.date
-            });
-            
-            // Fetch questions for this module if not already included
-            let questionsData = moduleData.questions;
-            
-            // If questions are just IDs, fetch the full question data
-            if (moduleData.questions.length > 0 && typeof moduleData.questions[0] === 'string') {
-              const questionsResponse = await axios.get(`${API_BASE}/api/modules/${moduleId}/questions`);
-              questionsData = questionsResponse.data;
-            }
-            
-            // Format questions for the question pane
-            const formattedQuestions = questionsData.map(q => ({
-              id: q._id,
-              title: q.title,
-              description: q.description,
-              questionKey: q.questionKey || 'q1',
-              files: q.files || [],
-              testcases: q.testcases || {},
-              input: q.input || '',
-              evalScript: q.evalScript || '',
-              maxMarks: q.maxMarks,
-            }));
-            
-            setQuestions(formattedQuestions);
-          } else {
-            throw new Error('Failed to load module data');
-          }
-        } else {
-          // Fallback to static JSON if no module ID in localStorage
-          console.log('No module ID found, using static data');
-          const response = await fetch('/questionPool.json');
-          
-          if (!response.ok) {
-            throw new Error('Failed to fetch question data');
-          }
-          
-          const data = await response.json();
-          
+        // Ask the server which module is assigned to THIS session, rather
+        // than relying on localStorage (which only exists on whichever
+        // browser the teacher happened to click "Send to Students" from).
+        const sessionId = getCurrentLabSession();
+        const userId = getCurrentUser();
+
+        let moduleData = null;
+        try {
+          const currentModuleRes = await axios.get(
+            `${API_BASE}/api/sessions/${sessionId}/current-module`,
+            { params: { userId } }
+          );
+          moduleData = currentModuleRes.data;
+        } catch (moduleLookupErr) {
+          // 404 just means "no module assigned to this session yet" —
+          // expected before a teacher has sent one.
+          if (moduleLookupErr.response?.status !== 404) throw moduleLookupErr;
+        }
+
+        if (moduleData) {
+          console.log('Loaded active module from server:', moduleData._id);
+
+          // Set module info
           setModuleInfo({
-            _id: "static_module",
-            name: "Computer Networks Lab (Demo)",
-            description: "TCP/IP Socket Programming Practice",
-            maxMarks: 50,
-            time: "2 hours",
+            _id: moduleData._id,
+            name: moduleData.name,
+            description: moduleData.description,
+            maxMarks: moduleData.maxMarks,
+            time: moduleData.time || "Not specified",
+            date: moduleData.date
+          });
+
+          // Fetch questions for this module if not already included
+          let questionsData = moduleData.questions;
+
+          // If questions are just IDs, fetch the full question data
+          if (moduleData.questions.length > 0 && typeof moduleData.questions[0] === 'string') {
+            const questionsResponse = await axios.get(`${API_BASE}/api/modules/${moduleData._id}/questions`);
+            questionsData = questionsResponse.data;
+          }
+
+          // Format questions for the question pane
+          const formattedQuestions = questionsData.map(q => ({
+            id: q._id,
+            title: q.title,
+            description: q.description,
+            questionKey: q.questionKey || 'q1',
+            files: q.files || [],
+            testcases: q.testcases || {},
+            input: q.input || '',
+            evalScript: q.evalScript || '',
+            maxMarks: q.maxMarks,
+          }));
+
+          setQuestions(formattedQuestions);
+          lastLoadedModuleIdRef.current = moduleData._id;
+        } else {
+          // No module currently assigned (teacher hasn't sent one, or
+          // explicitly cleared it) — give students an open editor instead
+          // of canned demo content.
+          console.log('No module assigned to this session, enabling free-coding mode');
+          setModuleInfo({
+            _id: "free_coding",
+            name: "Free Coding",
+            description: "No lab module has been assigned right now. Feel free to write and run any C program you'd like using the editor below.",
+            maxMarks: null,
+            time: null,
             date: new Date().toISOString()
           });
-          
-          setQuestions(data);
+
+          setQuestions([{
+            id: "free_coding",
+            title: "Free Coding",
+            description: "No lab module has been assigned right now. Write, run, and experiment with any C program you'd like — nothing here is graded.",
+            questionKey: "free",
+            files: [
+              { name: "main.c", tag: "main", precode: "#include <stdio.h>\n\nint main() {\n    // Write your code here\n    return 0;\n}\n" }
+            ],
+            testcases: {},
+            input: "",
+            evalScript: "",
+            maxMarks: null,
+          }]);
         }
       } catch (error) {
         console.error('Error loading module data:', error);
         setModuleError(error.response?.data?.error || error.message || 'Failed to load questions');
         
-        // Try to load from backup static source
-        try {
-          const backupResponse = await fetch('/questionPool.json');
-          if (!backupResponse.ok) throw new Error('Backup source unavailable');
-          
-          const backupData = await backupResponse.json();
-          setQuestions(backupData);
-          
-          // Create a fallback module
-          setModuleInfo({
-            _id: "fallback_module",
-            name: "Computer Networks Lab (Offline Mode)",
-            description: "Practice questions from local storage",
-            maxMarks: 50,
-            time: "Not timed",
-            date: new Date().toISOString()
-          });
-        } catch (backupError) {
-          console.error('Error loading backup questions:', backupError);
-          setQuestions([]);
-        }
+        // Something actually went wrong (not just "no module assigned") —
+        // still don't leave the student with a broken editor.
+        setModuleInfo({
+          _id: "free_coding",
+          name: "Free Coding",
+          description: "Couldn't reach the lab server just now. Feel free to write and run any C program you'd like using the editor below.",
+          maxMarks: null,
+          time: null,
+          date: new Date().toISOString()
+        });
+        setQuestions([{
+          id: "free_coding",
+          title: "Free Coding",
+          description: "Couldn't reach the lab server just now. Write, run, and experiment with any C program you'd like — nothing here is graded.",
+          questionKey: "free",
+          files: [
+            { name: "main.c", tag: "main", precode: "#include <stdio.h>\n\nint main() {\n    // Write your code here\n    return 0;\n}\n" }
+          ],
+          testcases: {},
+          input: "",
+          evalScript: "",
+          maxMarks: null,
+        }]);
       }
       
       setLoadingQuestions(false);
@@ -220,15 +237,20 @@ export default function CNLabWorkspace() {
     
     window.addEventListener('module-change', handleModuleChange);
     
-    // Check for module changes periodically
-    const checkModuleInterval = setInterval(() => {
-      const newModuleId = localStorage.getItem('currentModuleId');
-      const prevModuleId = sessionStorage.getItem('loadedModuleId');
-      
-      if (newModuleId && newModuleId !== prevModuleId) {
-        console.log('New module detected:', newModuleId);
-        sessionStorage.setItem('loadedModuleId', newModuleId);
-        handleModuleChange();
+    // Check for module changes periodically by asking the server, rather
+    // than watching a localStorage value that only exists on the teacher's
+    // own browser.
+    const checkModuleInterval = setInterval(async () => {
+      try {
+        const sessionId = getCurrentLabSession();
+        const res = await axios.get(`${API_BASE}/api/sessions/${sessionId}/current-module`);
+        const activeModuleId = res.data?._id;
+        if (activeModuleId && activeModuleId !== lastLoadedModuleIdRef.current) {
+          console.log('New module detected on server:', activeModuleId);
+          handleModuleChange();
+        }
+      } catch (err) {
+        // 404 just means no module assigned yet — try again next tick.
       }
     }, 5000);
     
@@ -489,9 +511,6 @@ export default function CNLabWorkspace() {
       : activeFile.path;
     
     setTimeout(() => {
-      // #region agent log
-      fetch('http://127.0.0.1:7428/ingest/2fbaf848-a638-4e46-beb4-cd433f8f423b',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d3d7c5'},body:JSON.stringify({sessionId:'d3d7c5',location:'CNLabWorkspace.jsx:handleRun',message:'run dispatch',data:{fullPath,activeFilePath:activeFile.path,currentWorkingDir},timestamp:Date.now(),hypothesisId:'H4'})}).catch(()=>{});
-      // #endregion
       window.dispatchEvent(new CustomEvent('run-file-in-terminal', {
         detail: {
           code: activeFile.code,
@@ -570,7 +589,7 @@ export default function CNLabWorkspace() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: 'testuser123',  // or dynamically get userId if you have JWT/session
+          userId: getCurrentUser(),
           oldPath,
           newPath
         })
@@ -624,6 +643,7 @@ export default function CNLabWorkspace() {
   };
 
   const activeFile = files.find(f => f.id === activeFileId) || files[0];
+  const isFreeCoding = moduleInfo?._id === 'free_coding';
 
   const handleEvaluate = async () => {
     const currentQuestion = questions[activeQuestionIdx];
@@ -682,9 +702,6 @@ export default function CNLabWorkspace() {
       }));
     } catch (error) {
       console.error('Evaluation failed:', error);
-      // #region agent log
-      fetch('http://127.0.0.1:7428/ingest/2fbaf848-a638-4e46-beb4-cd433f8f423b',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d3d7c5'},body:JSON.stringify({sessionId:'d3d7c5',location:'CNLabWorkspace.jsx:handleEvaluate',message:'evaluation error',data:{error:error.response?.data?.error||error.message,tagToFileMap},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
-      // #endregion
       alert(error.response?.data?.error || 'Evaluation failed');
     } finally {
       setIsEvaluating(false);
@@ -964,6 +981,7 @@ export default function CNLabWorkspace() {
                   tags={tags}
                   tagToFileMap={tagToFileMap}
                   setTagToFileMap={setTagToFileMap}
+                  isFreeCoding={isFreeCoding}
                 />
               </Panel>
             </PanelGroup>

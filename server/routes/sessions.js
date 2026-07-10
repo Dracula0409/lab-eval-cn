@@ -4,6 +4,8 @@ import Session from '../models/Session.js';
 import { CNModule } from '../models/Module.js';
 import User from '../models/User.js';
 import Course from '../models/Course.js';
+import LabAssignment from '../models/LabAssignment.js';
+import { getCurrentSlotKey } from '../utils/labSlot.js';
 import { protect, authorize } from '../middleware/auth.js';
 import { ensureSessionContainer } from '../controllers/sshController.js';
 
@@ -175,68 +177,54 @@ router.patch('/modules/:id/quick-update', protect, async (req, res) => {
   }
 });
 
-// Get the currently assigned module for a session
+// Get the currently assigned module (global, slot-aware — see labSlot.js).
+// :sessionId is accepted for URL/back-compat but no longer used to look up
+// the assignment, since it's now a single global record rather than
+// per-session.
 router.get('/:sessionId/current-module', async (req, res) => {
   try {
-    const { sessionId } = req.params;
-    const userId = req.query.userId;
-    
-    if (!sessionId) {
-      return res.status(400).json({ error: 'Session ID is required' });
-    }
-    
-    // Find the session for this session ID
-    const session = await Session.findOne({ 
-      sessionId,
-      ...(userId ? { userId } : {})  // Only filter by userId if provided
-    }).populate({
+    const assignment = await LabAssignment.findOne({ key: 'global' }).populate({
       path: 'activeModule',
       populate: {
         path: 'questions',
         model: 'Question'
       }
     });
-    
-    if (!session) {
-      return res.status(404).json({ error: 'Session not found' });
+
+    if (!assignment || !assignment.activeModule) {
+      return res.status(404).json({ error: 'No module is currently assigned' });
     }
-    
-    if (!session.activeModule) {
-      return res.status(404).json({ error: 'No module is currently assigned to this session' });
+
+    // The assignment automatically expires once the AN/FN slot it was made
+    // in has ended, unless the teacher has since reassigned for the new slot.
+    if (assignment.slotKey !== getCurrentSlotKey()) {
+      return res.status(404).json({ error: 'No module is currently assigned for this lab slot' });
     }
-    
-    res.status(200).json(session.activeModule);
+
+    res.status(200).json(assignment.activeModule);
   } catch (err) {
     console.error('Error fetching current module:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Check if a module has been updated
+// Check if the globally-assigned module has changed (or expired out of the
+// current slot) since the client last loaded it.
 router.get('/:sessionId/check-module-update', async (req, res) => {
   try {
-    const { sessionId } = req.params;
     const { currentModuleId } = req.query;
-    
-    if (!sessionId) {
-      return res.status(400).json({ error: 'Session ID is required' });
-    }
-    
+
     if (!currentModuleId) {
       return res.status(400).json({ error: 'Current module ID is required' });
     }
-    
-    // Find the session
-    const session = await Session.findOne({ sessionId });
-    
-    if (!session) {
-      return res.status(404).json({ error: 'Session not found' });
-    }
-    
-    // Check if the module has changed
-    const activeModuleId = session.activeModule ? session.activeModule.toString() : null;
+
+    const assignment = await LabAssignment.findOne({ key: 'global' });
+    const stillInCurrentSlot = !!assignment && assignment.slotKey === getCurrentSlotKey();
+    const activeModuleId = stillInCurrentSlot && assignment.activeModule
+      ? assignment.activeModule.toString()
+      : null;
     const hasUpdate = activeModuleId !== currentModuleId;
-    
+
     res.status(200).json({
       hasUpdate,
       currentModuleId: activeModuleId

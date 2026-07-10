@@ -494,6 +494,23 @@ export default function TeacherUpload() {
     setShowSendModuleModal(true);
   };
 
+  const clearActiveModule = async () => {
+    if (!confirm('Clear the currently sent module? Students will be free to write any program until you send a module again.')) return;
+
+    setIsLoading(true);
+    try {
+      await axios.post(`${API_BASE}/api/modules/active-assignment/clear`);
+      setMessage('Active module cleared. Students can now code freely.');
+      setMessageType('success');
+    } catch (error) {
+      console.error('Error clearing active module:', error);
+      setMessage(error.response?.data?.error || 'Failed to clear the active module.');
+      setMessageType('error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const sendModuleToStudents = async () => {
     if (!selectedModuleToSend) {
       setMessage('Please select a module to send');
@@ -504,10 +521,9 @@ export default function TeacherUpload() {
     setIsLoading(true);
     
     try {
-      // Use a hardcoded test session ID for simplicity
-      const testSessionId = "lab_session_test";
-      
-      // Make the API request to assign the module to the test session
+      // Broadcast-assigns this module to every active session server-side
+      // (see Session.activeModule) — every student's browser picks it up on
+      // its next poll, regardless of which device/browser they're on.
       const response = await axios.post(`${API_BASE}/api/modules/${selectedModuleToSend}/assign-to-test-session`, {});
       
       if (response.data && response.data.success) {
@@ -517,10 +533,8 @@ export default function TeacherUpload() {
         setMessage(`${moduleName} successfully sent to students`);
         setMessageType('success');
         
-        // Update localStorage for test purposes so CNLabWorkspace can access it
-        localStorage.setItem('currentModuleId', selectedModuleToSend);
-        
-        // Dispatch a custom event that CNLabWorkspace can listen for
+        // Dispatch a custom event so CNLabWorkspace tabs open in *this* browser
+        // refresh immediately, instead of waiting for their next poll.
         window.dispatchEvent(new CustomEvent('module-change', { 
           detail: { 
             moduleId: selectedModuleToSend,
@@ -537,27 +551,8 @@ export default function TeacherUpload() {
       }
     } catch (error) {
       console.error('Error sending module:', error);
-      
-      // Simplified approach - even if the backend call fails, we'll set the module ID in localStorage
-      // This allows the student view to pick it up for demo purposes
-      localStorage.setItem('currentModuleId', selectedModuleToSend);
-      
-      // Dispatch a custom event that CNLabWorkspace can listen for
-      const moduleInfo = modules.find(m => m._id === selectedModuleToSend);
-      window.dispatchEvent(new CustomEvent('module-change', { 
-        detail: { 
-          moduleId: selectedModuleToSend,
-          moduleName: moduleInfo?.name || 'New module' 
-        } 
-      }));
-      
-      setMessage(`Module assigned for test purposes (bypassing backend validation)`);
-      setMessageType('success');
-      
-      // Close the modal
-      setShowSendModuleModal(false);
-      setSelectedModuleToSend(null);
-      setSelectedSessionId('');
+      setMessage(error.response?.data?.error || 'Failed to send module to students. Please check the server and try again.');
+      setMessageType('error');
     } finally {
       setIsLoading(false);
     }
@@ -757,10 +752,18 @@ export default function TeacherUpload() {
                 </h2>
                 
                 {isLabSession && (
-                  <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
+                  <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md flex items-center justify-between">
                     <p className="text-sm text-blue-800">
                       <span className="font-bold">Lab Session Mode Active:</span> You can send modules to students and make quick updates during the session.
                     </p>
+                    <button
+                      type="button"
+                      onClick={clearActiveModule}
+                      disabled={isLoading}
+                      className="ml-4 px-3 py-1.5 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 disabled:opacity-50 whitespace-nowrap"
+                    >
+                      Clear Sent Module
+                    </button>
                   </div>
                 )}
                 

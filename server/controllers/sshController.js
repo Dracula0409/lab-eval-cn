@@ -71,7 +71,7 @@ export function initSSHWebSocket(server) {
 
     // No real JWT auth yet — the client sends the logged-in student's ID
     // directly. Fall back to the test user only if none was provided.
-    const userId = queryUserId || 'testuser123';
+    const userId = queryUserId;
 
     try {
       const { sshPort, sessionId } = await ensureSessionContainer(userId);

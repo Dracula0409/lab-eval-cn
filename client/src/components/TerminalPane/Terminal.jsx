@@ -3,6 +3,7 @@ import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import "xterm/css/xterm.css";
 import axios from 'axios';
+import { API_BASE } from '../../config';
 
 const TerminalComponent = ({
   isVisible,
@@ -27,7 +28,7 @@ const TerminalComponent = ({
 
   // No real JWT auth yet — fall back to the test user if nobody's logged in.
   const effectiveUserId = localStorage.getItem('studentId');
-  const wsURL = `ws://localhost:5001/ws/ssh?userId=${encodeURIComponent(effectiveUserId)}&terminalId=${terminalId}`;
+  const wsURL = `${API_BASE}/ws/ssh?userId=${encodeURIComponent(effectiveUserId)}&terminalId=${terminalId}`;
 
   //Track current Working directory
   const requestCurrentWorkingDir = () => {

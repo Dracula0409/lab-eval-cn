@@ -42,6 +42,7 @@ export default function EditorPane({
   tags,
   tagToFileMap,
   setTagToFileMap,
+  isFreeCoding,
 }) {
   const [fontSize, setFontSize] = useState(14);
   const [theme, setTheme] = useState('vs-dark');
@@ -239,6 +240,7 @@ export default function EditorPane({
         setShowTerminal={setShowTerminal}
         onEvaluate={onEvaluate}
         isEvaluating={isEvaluating}
+        isFreeCoding={isFreeCoding}
       />
 
       {/* Click outside to close settings */}

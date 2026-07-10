@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { CheckCircleIcon, XCircleIcon, CodeBracketIcon, ClockIcon, ArrowLeftIcon } from '@heroicons/react/24/outline';
+import { API_BASE } from '../../config';
 
 function SubmissionResults({ results = [], evalError = null }) {
   if (evalError) {
@@ -41,7 +42,7 @@ export default function Submissions({ userId, questionId, refreshTrigger = 0 }) 
     const fetchSubmissions = async () => {
       try {
         const query = new URLSearchParams({ userId, questionId });
-        const res = await fetch(`http://localhost:5001/api/submission/fetch?${query}`);
+        const res = await fetch(`${API_BASE}/api/submission/fetch?${query}`);
         const data = await res.json();
         setSubmissions(Array.isArray(data) ? data : []);
       } catch (err) {

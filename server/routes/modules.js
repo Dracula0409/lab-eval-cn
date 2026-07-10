@@ -1,8 +1,8 @@
 import express from 'express';
 import { CNModule } from '../models/Module.js';
 import Course from '../models/Course.js';
-// Removing User import since we're not using ObjectId reference anymore
-// import User from '../models/User.js';
+import LabAssignment from '../models/LabAssignment.js';
+import { getCurrentSlotKey } from '../utils/labSlot.js';
 import mongoose from 'mongoose';
 import { protect, authorize } from '../middleware/auth.js';
 
@@ -188,33 +188,53 @@ router.patch('/:id/quick-update', async (req, res) => {
 });
 
 // Simplified endpoint to assign module to test session (no session validation)
+// Broadcast-assign a module to every currently active student session.
+// Used by the teacher's "Send to Students" action.
+// replace the whole assign-to-test-session route with:
 router.post('/:moduleId/assign-to-test-session', async (req, res) => {
   try {
     const { moduleId } = req.params;
-    
+
     if (!mongoose.Types.ObjectId.isValid(moduleId)) {
       return res.status(400).json({ error: 'Invalid module ID format' });
     }
-    
-    // Check if the module exists
+
     const module = await CNModule.findById(moduleId);
-      
     if (!module) {
       return res.status(404).json({ error: 'Module not found' });
     }
-    
-    // For testing purposes, we'll just return success without actually updating any session
-    // In a real implementation, this would update session records in the database
-    
-    // Return success
-    res.status(200).json({ 
+
+    const slotKey = getCurrentSlotKey();
+
+    await LabAssignment.findOneAndUpdate(
+      { key: 'global' },
+      { activeModule: moduleId, slotKey, assignedAt: new Date() },
+      { upsert: true, new: true }
+    );
+
+    res.status(200).json({
       success: true,
-      message: 'Module assigned successfully for testing',
+      message: `Module assigned successfully for the current lab slot (${slotKey})`,
       moduleId,
-      moduleName: module.name
+      moduleName: module.name,
+      slot: slotKey,
     });
   } catch (err) {
     console.error('Error assigning module for testing:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/active-assignment/clear', async (req, res) => {
+  try {
+    await LabAssignment.findOneAndUpdate(
+      { key: 'global' },
+      { activeModule: null, slotKey: null, assignedAt: null },
+      { upsert: true }
+    );
+    res.status(200).json({ success: true, message: 'Active module assignment cleared' });
+  } catch (err) {
+    console.error('Error clearing active assignment:', err);
     res.status(500).json({ error: err.message });
   }
 });
