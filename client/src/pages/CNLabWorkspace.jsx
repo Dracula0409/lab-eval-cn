@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Panel, PanelGroup } from 'react-resizable-panels';
 import axios from 'axios';
 import Header from '../components/Header';
@@ -47,6 +48,94 @@ const MobileTabs = ({ activeTab, setActiveTab, tabs }) => (
   </div>
 );
 
+const EvaluationOverlay = ({ overlay, logBoxRef, onClose }) => {
+  if (!overlay.open) return null;
+
+  const ansiToHtml = (text) => {
+    const escapeHtml = (value) => value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+    const colorMap = {
+      30: '#111827',
+      31: '#ff5f56',
+      32: '#27c93f',
+      33: '#ffbd2e',
+      34: '#5e9cff',
+      35: '#d670d6',
+      36: '#56d4dd',
+      37: '#f8f8f2',
+      90: '#6b7280',
+      91: '#ff7b72',
+      92: '#7ee787',
+      93: '#f2cc60',
+      94: '#79c0ff',
+      95: '#d2a8ff',
+      96: '#a5f3fc',
+      97: '#ffffff',
+    };
+
+    let html = '';
+    let openSpan = false;
+    const parts = escapeHtml(text).split(/(\x1b\[[0-9;]*m)/g);
+    for (const part of parts) {
+      const match = part.match(/^\x1b\[([0-9;]*)m$/);
+      if (!match) {
+        html += part;
+        continue;
+      }
+
+      const codes = match[1].split(';').filter(Boolean).map(Number);
+      if (openSpan) {
+        html += '</span>';
+        openSpan = false;
+      }
+      if (codes.length === 0 || codes.includes(0)) continue;
+
+      const color = codes.map((code) => colorMap[code]).find(Boolean);
+      const bold = codes.includes(1);
+      if (color || bold) {
+        html += `<span style="${color ? `color:${color};` : ''}${bold ? 'font-weight:700;' : ''}">`;
+        openSpan = true;
+      }
+    }
+    if (openSpan) html += '</span>';
+    return html;
+  };
+
+  const logText = overlay.logs.join('');
+
+  return (
+    <div className="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4">
+      <div className="w-full max-w-3xl bg-[#101010] rounded-lg shadow-2xl border border-gray-700 overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-700 flex items-center justify-between bg-[#181818]">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-100">{overlay.title}</h2>
+            <p className="text-xs text-gray-400">
+              {overlay.running ? 'Evaluation is running. Please wait.' : 'Evaluation complete.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={overlay.running}
+            className="px-3 py-1.5 rounded-md text-sm font-medium bg-gray-800 text-gray-100 border border-gray-600 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Close
+          </button>
+        </div>
+        <pre
+          ref={logBoxRef}
+          className="h-96 overflow-auto bg-black text-[#f8f8f2] text-[13px] leading-5 p-4 whitespace-pre-wrap font-mono"
+          style={{ fontFamily: 'Menlo, Monaco, Consolas, "Liberation Mono", monospace' }}
+          dangerouslySetInnerHTML={{ __html: ansiToHtml(logText) }}
+        />
+      </div>
+    </div>
+  );
+};
+
 
 // Helper functions
 const getCurrentUser = () => localStorage.getItem('studentId');
@@ -60,6 +149,7 @@ const getCurrentDateTime = () => {
 
 
 export default function CNLabWorkspace() {
+  const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [activeTab, setActiveTab] = useState('question');
   const [language, setLanguage] = useState('c');
@@ -82,11 +172,26 @@ export default function CNLabWorkspace() {
   const [questionPaneTab, setQuestionPaneTab] = useState('description');
   const [evalMessage, setEvalMessage] = useState(null);
   const [submissionRefreshTrigger, setSubmissionRefreshTrigger] = useState(0);
+  const [attemptInfo, setAttemptInfo] = useState(null);
+  const [evaluationOverlay, setEvaluationOverlay] = useState({
+    open: false,
+    title: '',
+    running: false,
+    logs: [],
+  });
   const panelRef = useRef(null);
+  const logBoxRef = useRef(null);
   const dirtyFileIdsRef = useRef(new Set());
   const fileHydrationRequestRef = useRef(0);
   const lastLoadedModuleIdRef = useRef(null);
+  const autoSubmitStartedRef = useRef(false);
   // const [isSubmitted, setIsSubmitted] = useState(false);
+
+  useEffect(() => {
+    if (localStorage.getItem('isLoggedIn') !== 'true' || !getCurrentUser()) {
+      navigate('/login');
+    }
+  }, [navigate]);
 
   useEffect(() => {
     console.log(currentWorkingDir);
@@ -133,7 +238,11 @@ export default function CNLabWorkspace() {
             description: moduleData.description,
             maxMarks: moduleData.maxMarks,
             time: moduleData.time || "Not specified",
-            date: moduleData.date
+            date: moduleData.date,
+            durationMinutes: moduleData.assignment?.durationMinutes || moduleData.durationMinutes || 60,
+            endsAt: moduleData.assignment?.endsAt || null,
+            targetBatch: moduleData.assignment?.targetBatch || moduleData.targetBatch || '',
+            sessionSlot: moduleData.assignment?.sessionSlot || moduleData.sessionSlot || ''
           });
 
           // Fetch questions for this module if not already included
@@ -160,6 +269,10 @@ export default function CNLabWorkspace() {
 
           setQuestions(formattedQuestions);
           lastLoadedModuleIdRef.current = moduleData._id;
+          startOrRefreshAttempt(moduleData._id).catch((err) => {
+            console.error('Failed to start/refresh test attempt:', err);
+            setModuleError(err.response?.data?.error || 'Could not start your test timer.');
+          });
         } else {
           // No module currently assigned (teacher hasn't sent one, or
           // explicitly cleared it) — give students an open editor instead
@@ -173,6 +286,7 @@ export default function CNLabWorkspace() {
             time: null,
             date: new Date().toISOString()
           });
+          setAttemptInfo(null);
 
           setQuestions([{
             id: "free_coding",
@@ -202,6 +316,7 @@ export default function CNLabWorkspace() {
           time: null,
           date: new Date().toISOString()
         });
+        setAttemptInfo(null);
         setQuestions([{
           id: "free_coding",
           title: "Free Coding",
@@ -243,7 +358,9 @@ export default function CNLabWorkspace() {
     const checkModuleInterval = setInterval(async () => {
       try {
         const sessionId = getCurrentLabSession();
-        const res = await axios.get(`${API_BASE}/api/sessions/${sessionId}/current-module`);
+        const res = await axios.get(`${API_BASE}/api/sessions/${sessionId}/current-module`, {
+          params: { userId: getCurrentUser() },
+        });
         const activeModuleId = res.data?._id;
         if (activeModuleId && activeModuleId !== lastLoadedModuleIdRef.current) {
           console.log('New module detected on server:', activeModuleId);
@@ -259,6 +376,18 @@ export default function CNLabWorkspace() {
       clearInterval(checkModuleInterval);
     };
   }, []);
+
+  useEffect(() => {
+    if (!moduleInfo?._id || moduleInfo._id === 'free_coding') return undefined;
+
+    const interval = setInterval(() => {
+      startOrRefreshAttempt(moduleInfo._id).catch((err) => {
+        console.error('Failed to refresh test attempt:', err);
+      });
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [moduleInfo?._id]);
 
 
   function getTagsFromQuestion(question) {
@@ -550,6 +679,115 @@ export default function CNLabWorkspace() {
     }
   };
 
+  const saveActiveFile = async () => {
+    const file = files.find(f => f.id === activeFileId);
+    if (!file) return;
+    await saveFile(file);
+    dirtyFileIdsRef.current.delete(file.id);
+  };
+
+  const appendEvaluationLog = (line) => {
+    const text = line.endsWith('\n') ? line : `${line}\n`;
+    setEvaluationOverlay((prev) => ({
+      ...prev,
+      logs: [...prev.logs, text],
+    }));
+  };
+
+  useEffect(() => {
+    if (logBoxRef.current) {
+      logBoxRef.current.scrollTop = logBoxRef.current.scrollHeight;
+    }
+  }, [evaluationOverlay.logs]);
+
+  const runEvaluationWithLogs = async ({ endpoint, payload, title }) => {
+    setEvaluationOverlay({
+      open: true,
+      title,
+      running: true,
+      logs: [`${title} started...`],
+    });
+
+    const response = await fetch(`${API_BASE}/api/evaluation/${endpoint}?stream=1`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok || !response.body) {
+      const body = await response.text().catch(() => '');
+      throw new Error(body || `Evaluation failed with status ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalResult = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const event = JSON.parse(line);
+        if (event.event === 'log') {
+          appendEvaluationLog(event.message || '');
+        } else if (event.event === 'done') {
+          finalResult = event.result;
+          appendEvaluationLog('Evaluation finished.');
+        } else if (event.event === 'error') {
+          throw new Error(event.error || 'Evaluation failed.');
+        }
+      }
+    }
+
+    setEvaluationOverlay((prev) => ({ ...prev, running: false }));
+    return finalResult || {};
+  };
+
+  const startOrRefreshAttempt = async (moduleId) => {
+    if (!moduleId || moduleId === 'free_coding') return null;
+
+    const res = await axios.post(`${API_BASE}/api/sessions/test-attempts/start`, {
+      userId: getCurrentUser(),
+      moduleId,
+      sessionId: getCurrentLabSession(),
+    });
+
+    setAttemptInfo(res.data);
+    return res.data;
+  };
+
+  useEffect(() => {
+    const handleSaveShortcut = (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        event.stopPropagation();
+        saveActiveFile();
+      }
+    };
+
+    window.addEventListener('keydown', handleSaveShortcut, true);
+    return () => window.removeEventListener('keydown', handleSaveShortcut, true);
+  }, [files, activeFileId]);
+
+  useEffect(() => {
+    if (!evaluationOverlay.running) return;
+
+    const blockKeys = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    window.addEventListener('keydown', blockKeys, true);
+    return () => window.removeEventListener('keydown', blockKeys, true);
+  }, [evaluationOverlay.running]);
+
 
   //handle rename and code language change
   const renameFile = async (fileId, newName) => {
@@ -649,7 +887,7 @@ export default function CNLabWorkspace() {
     const currentQuestion = questions[activeQuestionIdx];
     if (!currentQuestion) return;
 
-    if (Object.keys(tagToFileMap).length !== tags.length) {
+    if (useActiveFiles && Object.keys(tagToFileMap).length !== tags.length) {
       alert('Please assign a file for every tag before running evaluation.');
       return;
     }
@@ -672,7 +910,10 @@ export default function CNLabWorkspace() {
       const tagPaths = { ...tagToFileMap };
       const sourceFiles = Object.fromEntries(filteredFiles.map(f => [f.name, f.code]));
 
-      const response = await axios.post(`${API_BASE}/api/evaluation/run`, {
+      const response = await runEvaluationWithLogs({
+        endpoint: 'run',
+        title: `Evaluating ${currentQuestion.questionKey || currentQuestion.title}`,
+        payload: {
         userId: getCurrentUser(),
         studentName: getStudentName(),
         sessionId: getCurrentLabSession(),
@@ -680,9 +921,10 @@ export default function CNLabWorkspace() {
         questionId: currentQuestion.id,
         tagPaths,
         sourceFiles,
+        },
       });
 
-      const results = response.data?.results ?? [];
+      const results = response?.results ?? [];
       setTestCaseResults((prev) => ({
         ...prev,
         [currentQuestion.id]: results,
@@ -693,7 +935,7 @@ export default function CNLabWorkspace() {
 
       const { total } = summarizeResults(results);
       if (total === 0) {
-        const hint = response.data?.stderr?.trim() || 'Evaluation finished but no test results were produced. Check that your code compiles.';
+        const hint = response?.stderr?.trim() || 'Evaluation finished but no test results were produced. Check that your code compiles.';
         setEvalMessage(hint);
       }
 
@@ -702,6 +944,11 @@ export default function CNLabWorkspace() {
       }));
     } catch (error) {
       console.error('Evaluation failed:', error);
+      setEvaluationOverlay((prev) => ({
+        ...prev,
+        running: false,
+        logs: [...prev.logs, error.message || 'Evaluation failed.'],
+      }));
       alert(error.response?.data?.error || 'Evaluation failed');
     } finally {
       setIsEvaluating(false);
@@ -717,7 +964,14 @@ export default function CNLabWorkspace() {
 
 
   const handleSubmit = async () => {
+    return submitQuestion(questions[activeQuestionIdx], { autoSubmitted: false, useActiveFiles: true });
+  };
+
+  const submitQuestion = async (question, { autoSubmitted = false, useActiveFiles = false } = {}) => {
+    if (!question || question.id === 'free_coding') return null;
+
     if (Object.keys(tagToFileMap).length !== tags.length) {
+      if (autoSubmitted) return null;
       alert('Please assign a file for every tag before submitting.');
       return;
     }
@@ -725,9 +979,32 @@ export default function CNLabWorkspace() {
     setIsSubmitting(true);
 
     try {
-      const question = questions[activeQuestionIdx];
-      const requiredPaths = Object.values(tagToFileMap);
-      const filteredFiles = files.filter(f => requiredPaths.includes(f.path));
+      let effectiveTagMap = tagToFileMap;
+      let filteredFiles = files.filter(f => Object.values(effectiveTagMap).includes(f.path));
+
+      if (!useActiveFiles) {
+        effectiveTagMap = {};
+        filteredFiles = await Promise.all((question.files || []).map(async (f) => {
+          const filePath = `${LABUSER_HOME}/${f.name}`;
+          let code = f.precode || '';
+          try {
+            const response = await axios.get(`${API_BASE}/api/file/read-file`, {
+              params: { cwd: LABUSER_HOME, filename: f.name, userId: getCurrentUser() },
+            });
+            code = response.data?.code ?? code;
+          } catch {
+            // Use starter code if no saved file exists for this question.
+          }
+          if (f.tag) effectiveTagMap[f.tag] = filePath;
+          return {
+            id: f.tag || f.name,
+            name: f.name,
+            path: filePath,
+            language: f.name?.endsWith('.py') ? 'python' : 'c',
+            code,
+          };
+        }));
+      }
 
       for (const file of filteredFiles) {
         await axios.post(`${API_BASE}/api/save-file`, {
@@ -738,10 +1015,15 @@ export default function CNLabWorkspace() {
         });
       }
 
-      const tagPaths = { ...tagToFileMap };
+      const tagPaths = { ...effectiveTagMap };
       const sourceFiles = Object.fromEntries(filteredFiles.map(f => [f.name, f.code]));
 
-      const evalRes = await axios.post(`${API_BASE}/api/evaluation/submit`, {
+      const evalRes = await runEvaluationWithLogs({
+        endpoint: 'submit',
+        title: autoSubmitted
+          ? `Auto-submitting ${question.questionKey || question.title}`
+          : `Submitting ${question.questionKey || question.title}`,
+        payload: {
         userId: getCurrentUser(),
         studentName: getStudentName(),
         sessionId: getCurrentLabSession(),
@@ -749,16 +1031,17 @@ export default function CNLabWorkspace() {
         questionId: question.id,
         tagPaths,
         sourceFiles,
+        },
       });
 
-      if (evalRes.data?.results) {
+      if (evalRes?.results) {
         setTestCaseResults((prev) => ({
           ...prev,
-          [question.id]: evalRes.data.results,
+          [question.id]: evalRes.results,
         }));
       }
 
-      const results = evalRes.data?.results ?? [];
+      const results = evalRes?.results ?? [];
       const testcaseCount = Object.keys(question.testcases || {}).length;
       const { passed: passedFromResults } = summarizeResults(results);
       const correctCount = results.length > 0 ? passedFromResults : 0;
@@ -771,13 +1054,15 @@ export default function CNLabWorkspace() {
           userId: getCurrentUser(),
           questionId: question.id,
           sessionId: getCurrentLabSession(),
+          moduleId: moduleInfo?._id,
           module: moduleInfo?.name || 'CN Lab',
           sourceCode: sourceFiles,
           language: filteredFiles[0]?.language || 'c',
           passedCount: correctCount,
           totalTestCases: totalCount,
           evaluationResults: results,
-          evalError: results.length === 0 ? (evalRes.data?.stderr?.trim() || null) : null,
+          evalError: results.length === 0 ? (evalRes?.stderr?.trim() || null) : null,
+          autoSubmitted,
         }),
       });
 
@@ -788,23 +1073,53 @@ export default function CNLabWorkspace() {
 
       const statusLabel = totalCount > 0 && correctCount === totalCount ? 'All test cases passed' : `${correctCount}/${totalCount} test cases passed`;
       setSubmissionRefreshTrigger((n) => n + 1);
-      alert(`Submitted successfully. ${statusLabel}`);
+      if (!autoSubmitted) alert(`Submitted successfully. ${statusLabel}`);
+      return { questionId: question.id, statusLabel };
     } catch (err) {
       console.error('[Frontend] Submission error:', err);
-      alert(err.response?.data?.error || 'Failed to submit.');
+      setEvaluationOverlay((prev) => ({
+        ...prev,
+        running: false,
+        logs: [...prev.logs, err.message || 'Submission failed.'],
+      }));
+      if (!autoSubmitted) alert(err.response?.data?.error || 'Failed to submit.');
+      return null;
     } finally {
       setIsSubmitting(false);
     }
   };
 
 
-  const handleTimeUp = () => {
-    alert("[Time] Time's up! Your code will be automatically submitted.");
-    handleSubmit();
+  const handleTimeUp = async () => {
+    if (autoSubmitStartedRef.current || isFreeCoding || !moduleInfo?._id) return;
+    autoSubmitStartedRef.current = true;
+
+    try {
+      const res = await axios.get(`${API_BASE}/api/submission/has-submission`, {
+        params: {
+          userId: getCurrentUser(),
+          sessionId: getCurrentLabSession(),
+          moduleId: moduleInfo._id,
+        },
+      });
+
+      if (!res.data?.hasSubmission) {
+        alert("[Time] Time's up. Auto-submitting your answers now.");
+        for (const q of questions) {
+          await submitQuestion(q, {
+            autoSubmitted: true,
+            useActiveFiles: q.id === questions[activeQuestionIdx]?.id,
+          });
+        }
+      }
+    } finally {
+      navigate('/student-dashboard');
+    }
   };
 
 
   const question = questions && questions.length > 0 ? questions[activeQuestionIdx] : undefined;
+  const remainingSeconds = attemptInfo?.remainingSeconds ?? ((moduleInfo?.durationMinutes || 60) * 60);
 
 
   // Keep window.questions and window.activeQuestionIdx in sync for evaluation
@@ -839,10 +1154,15 @@ export default function CNLabWorkspace() {
   if (isMobile) {
     return (
       <div className="flex flex-col h-screen bg-gray-50">
+        <EvaluationOverlay
+          overlay={evaluationOverlay}
+          logBoxRef={logBoxRef}
+          onClose={() => setEvaluationOverlay((prev) => ({ ...prev, open: false }))}
+        />
         <Header
           title={question ? question.title : 'No questions available'}
           onTimeUp={handleTimeUp}
-          timeLimit={question && question.timeLimit ? question.timeLimit : 3600}
+          timeLimit={isFreeCoding ? null : remainingSeconds}
         />
         <MobileTabs
           activeTab={activeTab}
@@ -883,6 +1203,7 @@ export default function CNLabWorkspace() {
               saveStatus={saveStatus}
               renameFile={renameFile}
               updateFileLanguage={updateFileLanguage}
+              onSave={saveActiveFile}
             />
           )}
           {activeTab === 'terminal' && (
@@ -900,10 +1221,15 @@ export default function CNLabWorkspace() {
   // Desktop layout
   return (
     <div className="flex flex-col h-screen bg-white">
+      <EvaluationOverlay
+        overlay={evaluationOverlay}
+        logBoxRef={logBoxRef}
+        onClose={() => setEvaluationOverlay((prev) => ({ ...prev, open: false }))}
+      />
       <Header
         title={moduleInfo ? moduleInfo.name : (question ? question.title : 'No questions available')}
         onTimeUp={handleTimeUp}
-        timeLimit={question && question.timeLimit ? question.timeLimit : 300}
+        timeLimit={isFreeCoding ? null : remainingSeconds}
         showQuestion={showQuestion}
         onToggleQuestion={() => setShowQuestion(!showQuestion)}
         moduleInfo={moduleInfo}
@@ -982,6 +1308,7 @@ export default function CNLabWorkspace() {
                   tagToFileMap={tagToFileMap}
                   setTagToFileMap={setTagToFileMap}
                   isFreeCoding={isFreeCoding}
+                  onSave={saveActiveFile}
                 />
               </Panel>
             </PanelGroup>

@@ -8,6 +8,8 @@ import {
   CubeIcon,
   ArrowRightOnRectangleIcon,
   ClipboardDocumentListIcon,
+  UsersIcon,
+  ClockIcon,
 } from '@heroicons/react/24/outline';
 
 const actions = [
@@ -34,6 +36,22 @@ const actions = [
     icon: PaperAirplaneIcon,
     to: '/teacher-upload?tab=modules&labSession=1',
     color: 'from-cyan-500 to-blue-600',
+  },
+  {
+    key: 'batches',
+    title: 'Batches & Students',
+    description: 'Create batches, enroll students, and approve password reset requests.',
+    icon: UsersIcon,
+    to: '/teacher-batches',
+    color: 'from-sky-500 to-indigo-600',
+  },
+  {
+    key: 'add-time',
+    title: 'Add Test Time',
+    description: 'Extend time for one student, a batch, or all active attempts.',
+    icon: ClockIcon,
+    to: '/teacher-time',
+    color: 'from-violet-500 to-fuchsia-600',
   },
   {
     key: 'student-performances',

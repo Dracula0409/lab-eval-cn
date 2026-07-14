@@ -2,6 +2,7 @@ import { useForm } from 'react-hook-form';
 import axios from 'axios';
 import { FormSection, FormLabel, ErrorMessage } from '../FormComponents';
 import { CheckIcon, PlusIcon } from '@heroicons/react/24/outline';
+import { API_BASE } from '../../config';
 
 const ModuleForm = ({ 
   initialModule, 
@@ -12,7 +13,8 @@ const ModuleForm = ({
   isLoading, 
   editingModuleId, 
   cancelModuleCreation,
-  setSelectedQuestionIds
+  setSelectedQuestionIds,
+  batches = []
 }) => {
   const moduleForm = useForm({
     defaultValues: initialModule
@@ -20,12 +22,15 @@ const ModuleForm = ({
 
   const resetToDB = async (moduleId) => {
     try {
-      const response = await axios.get(`http://localhost:5001/api/modules/${moduleId}`);
+      const response = await axios.get(`${API_BASE}/api/modules/${moduleId}`);
       moduleForm.reset({
         moduleName: response.data.name,
         description: response.data.description || '',
         lab: response.data.lab,
-        maxMarks: response.data.maxMarks
+        maxMarks: response.data.maxMarks,
+        durationMinutes: response.data.durationMinutes || 60,
+        targetBatch: response.data.targetBatch || '',
+        sessionSlot: response.data.sessionSlot || 'AN'
       });
       setSelectedQuestionIds(response.data.questions.map(q => typeof q === 'object' ? q._id : q));
     } catch(err) {
@@ -47,6 +52,48 @@ const ModuleForm = ({
           {moduleForm.formState.errors.moduleName && (
             <ErrorMessage>Module name is required</ErrorMessage>
           )}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <FormLabel htmlFor="durationMinutes" required>Test Duration</FormLabel>
+            <input
+              id="durationMinutes"
+              type="number"
+              min="1"
+              {...moduleForm.register('durationMinutes', { required: true, valueAsNumber: true })}
+              className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              placeholder="Minutes"
+            />
+          </div>
+
+          <div>
+            <FormLabel htmlFor="targetBatch">Batch</FormLabel>
+            <select
+              id="targetBatch"
+              {...moduleForm.register('targetBatch')}
+              className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            >
+              <option value="">All batches</option>
+              {batches.map((batch) => (
+                <option key={batch._id || batch.name} value={batch.name}>
+                  {batch.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <FormLabel htmlFor="sessionSlot" required>Session</FormLabel>
+            <select
+              id="sessionSlot"
+              {...moduleForm.register('sessionSlot', { required: true })}
+              className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            >
+              <option value="AN">AN</option>
+              <option value="FN">FN</option>
+            </select>
+          </div>
         </div>
         
         <div>

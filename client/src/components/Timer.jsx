@@ -4,6 +4,10 @@ export default function Timer({ duration, onExpire }) {
   const [timeLeft, setTimeLeft] = useState(duration);
 
   useEffect(() => {
+    setTimeLeft(duration);
+  }, [duration]);
+
+  useEffect(() => {
     if (timeLeft <= 0) {
       onExpire?.();
       return;

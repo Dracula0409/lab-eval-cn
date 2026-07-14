@@ -17,6 +17,7 @@ const ModuleTable = ({
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Lab ID</th>
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Questions</th>
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Max Marks</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Session</th>
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
             {isLabSession && (
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Lab Actions</th>
@@ -32,6 +33,9 @@ const ModuleTable = ({
                 {m.questions.length} question{m.questions.length !== 1 ? 's' : ''}
               </td>
               <td className="px-6 py-4 whitespace-nowrap">{m.maxMarks || '-'}</td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                {m.targetBatch || 'All'} · {m.sessionSlot || '-'} · {m.durationMinutes || 60}m
+              </td>
               <td className="px-6 py-4 whitespace-nowrap">
                 <button
                   onClick={() => editModule(m)}

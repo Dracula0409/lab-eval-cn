@@ -21,12 +21,15 @@ const SendModuleModal = ({ isOpen, onClose, sessions, selectedSessionId, setSele
               <p className="text-sm text-gray-500 mt-1">
                 {selectedModule.questions.length} question{selectedModule.questions.length !== 1 ? 's' : ''}
               </p>
+              <p className="text-sm text-gray-500 mt-1">
+                Batch {selectedModule.targetBatch || 'All'} · {selectedModule.sessionSlot || '-'} · {selectedModule.durationMinutes || 60} minutes
+              </p>
             </div>
           )}
           
           <div className="mt-4 p-3 bg-blue-50 rounded-md">
             <p className="text-sm text-blue-800">
-              <span className="font-medium">Note:</span> This will make the module available to all test students. For demo purposes, session selection has been simplified.
+              <span className="font-medium">Note:</span> This will make the module available to students in the configured batch until the test duration ends.
             </p>
           </div>
         </div>

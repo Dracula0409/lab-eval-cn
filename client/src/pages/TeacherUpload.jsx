@@ -37,7 +37,10 @@ const initialModule = {
   moduleName: '',
   description: '',
   lab: '123',
-  maxMarks: ''
+  maxMarks: '',
+  durationMinutes: 60,
+  targetBatch: '',
+  sessionSlot: 'AN'
 };
 
 export default function TeacherUpload() {
@@ -60,6 +63,8 @@ export default function TeacherUpload() {
   const [showBulkUploadModal, setShowBulkUploadModal] = useState(false);
   const [bulkUploadStatus, setBulkUploadStatus] = useState({ total: 0, uploaded: 0, failed: 0 });
   const [isBulkUploading, setIsBulkUploading] = useState(false);
+  const [batches, setBatches] = useState([]);
+  const [moduleDefaults, setModuleDefaults] = useState(initialModule);
 
   const navigate = useNavigate();
 
@@ -113,6 +118,7 @@ export default function TeacherUpload() {
   useEffect(() => {
     fetchQuestions();
     fetchModules();
+    fetchBatches();
     // Only fetch sessions if in lab session mode
     if (isLabSession) {
       fetchSessions();
@@ -134,6 +140,15 @@ export default function TeacherUpload() {
       setModules(response.data);
     } catch (err) {
       console.error('Error fetching modules:', err);
+    }
+  };
+
+  const fetchBatches = async () => {
+    try {
+      const response = await axios.get(`${API_BASE}/api/batches`);
+      setBatches(response.data || []);
+    } catch (err) {
+      console.error('Error fetching batches:', err);
     }
   };
   
@@ -436,6 +451,9 @@ export default function TeacherUpload() {
         questions: selectedQuestionIds,
         creator: "teacherId_placeholder", // Replace with authenticated teacher's id
         maxMarks: data.maxMarks,
+        durationMinutes: data.durationMinutes,
+        targetBatch: data.targetBatch,
+        sessionSlot: data.sessionSlot,
       };
       
       let response;
@@ -453,6 +471,7 @@ export default function TeacherUpload() {
         setMessageType('success');
         // Reset form and selection
         moduleForm.reset();
+        setModuleDefaults(initialModule);
         setSelectedQuestionIds([]);
         setIsCreatingModule(false);
         setEditingModuleId(null);
@@ -470,13 +489,17 @@ export default function TeacherUpload() {
   };
 
   const editModule = (module) => {
-    // Set form values
-    moduleForm.reset({
+    const defaults = {
       moduleName: module.name,
       description: module.description || '',
       lab: module.lab,
-      maxMarks: module.maxMarks
-    });
+      maxMarks: module.maxMarks,
+      durationMinutes: module.durationMinutes || 60,
+      targetBatch: module.targetBatch || '',
+      sessionSlot: module.sessionSlot || 'AN'
+    };
+    setModuleDefaults(defaults);
+    moduleForm.reset(defaults);
     
     // Set selected questions
     setSelectedQuestionIds(module.questions.map(q => typeof q === 'object' ? q._id : q));
@@ -506,6 +529,7 @@ export default function TeacherUpload() {
     setSelectedQuestionIds([]);
     setEditingModuleId(null);
     moduleForm.reset();
+    setModuleDefaults(initialModule);
   };
 
   const openSendModuleModal = (moduleId) => {
@@ -543,10 +567,14 @@ export default function TeacherUpload() {
       // Broadcast-assigns this module to every active session server-side
       // (see Session.activeModule) — every student's browser picks it up on
       // its next poll, regardless of which device/browser they're on.
-      const response = await axios.post(`${API_BASE}/api/modules/${selectedModuleToSend}/assign-to-test-session`, {});
+      const moduleInfo = modules.find(m => m._id === selectedModuleToSend);
+      const response = await axios.post(`${API_BASE}/api/modules/${selectedModuleToSend}/assign-to-test-session`, {
+        targetBatch: moduleInfo?.targetBatch || '',
+        sessionSlot: moduleInfo?.sessionSlot || '',
+        durationMinutes: moduleInfo?.durationMinutes || 60,
+      });
       
       if (response.data && response.data.success) {
-        const moduleInfo = modules.find(m => m._id === selectedModuleToSend);
         const moduleName = moduleInfo ? moduleInfo.name : 'Selected module';
         
         setMessage(`${moduleName} successfully sent to students`);
@@ -713,7 +741,8 @@ export default function TeacherUpload() {
             {isCreatingModule ? (
               <div className="px-6 py-4">
                 <ModuleForm
-                  initialModule={initialModule}
+                  key={editingModuleId || 'new-module'}
+                  initialModule={moduleDefaults}
                   questions={questions}
                   selectedQuestionIds={selectedQuestionIds}
                   toggleQuestionSelection={toggleQuestionSelection}
@@ -722,6 +751,7 @@ export default function TeacherUpload() {
                   editingModuleId={editingModuleId}
                   cancelModuleCreation={cancelModuleCreation}
                   setSelectedQuestionIds={setSelectedQuestionIds}
+                  batches={batches}
                 />
               </div>
             ) : activeTab === 'upload' ? (
@@ -806,6 +836,7 @@ export default function TeacherUpload() {
                       setIsCreatingModule(true);
                       setEditingModuleId(null);
                       moduleForm.reset(initialModule);
+                      setModuleDefaults(initialModule);
                       setSelectedQuestionIds([]);
                     }}
                     className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"

@@ -43,6 +43,7 @@ export default function EditorPane({
   tagToFileMap,
   setTagToFileMap,
   isFreeCoding,
+  onSave,
 }) {
   const [fontSize, setFontSize] = useState(14);
   const [theme, setTheme] = useState('vs-dark');
@@ -213,6 +214,11 @@ export default function EditorPane({
             value={activeFile.code}
             options={editorOptions}
             onChange={updateCode}
+            onMount={(editor, monaco) => {
+              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+                onSave?.();
+              });
+            }}
           />
         ) : (
           <div className="flex items-center justify-center h-full text-gray-500">

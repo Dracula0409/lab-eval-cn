@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-
-const TEACHER_USERNAME = 'networklab';
-const TEACHER_PASSWORD = 'admin@123';
+import axios from 'axios';
+import { API_BASE } from '../config';
 
 export default function TeacherLogin() {
   const navigate = useNavigate();
@@ -10,15 +9,20 @@ export default function TeacherLogin() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
 
-    if (username.trim() === TEACHER_USERNAME && password === TEACHER_PASSWORD) {
+    try {
+      await axios.post(`${API_BASE}/api/auth/teacher-login`, {
+        username: username.trim(),
+        password,
+      });
       localStorage.setItem('isTeacherLoggedIn', 'true');
+      localStorage.setItem('teacherId', username.trim());
       navigate('/teacher-dashboard');
-    } else {
-      setError('Invalid username or password.');
+    } catch (err) {
+      setError(err.response?.data?.error || 'Invalid username or password.');
     }
   };
 
