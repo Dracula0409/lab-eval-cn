@@ -9,7 +9,8 @@ import {
   SparklesIcon,
   ArrowLeftIcon,
   AcademicCapIcon,
-  InformationCircleIcon
+  InformationCircleIcon,
+  ArrowRightOnRectangleIcon
 } from '@heroicons/react/24/outline';
 
 export default function Header({ 
@@ -22,7 +23,8 @@ export default function Header({
   backLink,
   backText,
   moduleInfo,
-  loadingQuestions
+  loadingQuestions,
+  onLogout
 }) {
   return (
     <header className="bg-white/80 backdrop-blur-lg border-b border-gray-200/50 shadow-lg">
@@ -98,6 +100,16 @@ export default function Header({
               <ArrowLeftIcon className="w-4 h-4" />
               <span className="hidden lg:inline">{backText || 'Back'}</span>
             </Link>
+          )}
+          {/* Logout button for teacher pages */}
+          {isTeacherPage && onLogout && (
+            <button
+              onClick={onLogout}
+              className="flex items-center space-x-2 px-4 py-2 text-sm font-medium text-red-600 hover:text-white bg-red-50 hover:bg-red-600 backdrop-blur-sm rounded-xl border border-red-200/50 shadow-sm hover:shadow-md transition-all duration-300"
+            >
+              <ArrowRightOnRectangleIcon className="w-4 h-4" />
+              <span className="hidden lg:inline">Logout</span>
+            </button>
           )}
           
           {/* Question toggle (desktop only) */}

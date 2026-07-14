@@ -19,6 +19,7 @@ import {
   parseStatusCsv,
   toApiResults,
 } from '../utils/evaluationHelper.js';
+import { getCurrentSlotKey } from '../utils/labSlot.js';
 
 dotenv.config();
 
@@ -485,11 +486,18 @@ export async function runAndEvaluate({
 
     console.log("exitCode:", exitCode);
     const csvPath = `${EVAL_DIR}/${userId}_evaluated.csv`;
-    console.log("I reading csv");
+    const connPath = `${EVAL_DIR}/${userId}_conn.csv`;
+    const statusPath = `${EVAL_DIR}/${userId}_status.csv`;
+
+    console.log("I reading csvs (evaluated, conn, status)");
     const { stdout: csvContent } = await execViaConn(conn, `cat ${csvPath} 2>/dev/null || true`);
+    const { stdout: connCsvContent } = await execViaConn(conn, `cat ${connPath} 2>/dev/null || true`);
+    const { stdout: statusCsvContent } = await execViaConn(conn, `cat ${statusPath} 2>/dev/null || true`);
 
     console.log("J csv read");
     const communicationResults = parseEvaluatedCsv(csvContent, userId);
+    const connResults = parseConnCsv(connCsvContent);
+    const statusResults = parseStatusCsv(statusCsvContent);
     console.log("K parsing");
     const results = toApiResults(communicationResults);
 
@@ -505,10 +513,13 @@ export async function runAndEvaluate({
       tagPaths,
       sourceFiles,
       communicationResults,
+      connResults,
+      statusResults,
       rawCsv: csvContent,
       stdout,
       stderr,
       exitCode,
+      slotKey: getCurrentSlotKey(),
     });
 
     console.log("M returning");
@@ -516,6 +527,8 @@ export async function runAndEvaluate({
       runId: runDoc._id,
       results,
       communicationResults,
+      connResults,
+      statusResults,
       stdout,
       stderr,
       exitCode,

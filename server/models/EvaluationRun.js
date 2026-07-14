@@ -36,14 +36,18 @@ const evaluationRunSchema = new mongoose.Schema(
     sourceFiles: { type: Object, default: {} },
     communicationResults: [testcaseResultSchema],
     connResults: { type: mongoose.Schema.Types.Mixed },
+    statusResults: { type: mongoose.Schema.Types.Mixed },
     rawCsv: { type: String },
     stdout: { type: String },
     stderr: { type: String },
     exitCode: { type: Number },
+    // AN/FN lab slot this run was created in (see utils/labSlot.js), e.g. "2026-07-13_AN".
+    slotKey: { type: String },
   },
   { timestamps: true, collection: "evaluation_runs" }
 );
 
 evaluationRunSchema.index({ userId: 1, sessionId: 1, questionId: 1, runType: 1 });
+evaluationRunSchema.index({ questionId: 1, slotKey: 1, userId: 1 });
 
 export default mongoose.model("EvaluationRun", evaluationRunSchema);

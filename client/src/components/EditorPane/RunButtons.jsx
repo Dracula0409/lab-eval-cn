@@ -113,7 +113,7 @@ export default function RunButtons({
               </>
             )}
           </button>
-        )}``
+        )}
 
         {/* Show Terminal button */}
         {!showTerminal && (

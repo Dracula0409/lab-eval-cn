@@ -903,7 +903,7 @@ export default function CNLabWorkspace() {
       <Header
         title={moduleInfo ? moduleInfo.name : (question ? question.title : 'No questions available')}
         onTimeUp={handleTimeUp}
-        timeLimit={question && question.timeLimit ? question.timeLimit : 3600}
+        timeLimit={question && question.timeLimit ? question.timeLimit : 300}
         showQuestion={showQuestion}
         onToggleQuestion={() => setShowQuestion(!showQuestion)}
         moduleInfo={moduleInfo}

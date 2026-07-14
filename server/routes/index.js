@@ -8,6 +8,7 @@ import moduleRoutes from './modules.js';
 import sessionsRoute from './sessions.js';
 import evaluationRoute from './evaluation.js';
 import coursesRoute from './courses.js';
+import performanceRoute from './performance.js';
 import { saveFileToContainer } from '../controllers/sshController.js';
 import { getContainerNameForUser } from '../utils/sessionHelper.js';
 
@@ -21,6 +22,7 @@ router.use('/file',filesRoute);
 router.use('/modules', moduleRoutes);
 router.use('/sessions', sessionsRoute);
 router.use('/courses', coursesRoute);
+router.use('/performance', performanceRoute);
 
 async function renameFileInContainer({ userId, oldPath, newPath }) {
   const containerName = await getContainerNameForUser(userId);

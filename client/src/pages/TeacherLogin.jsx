@@ -16,7 +16,7 @@ export default function TeacherLogin() {
 
     if (username.trim() === TEACHER_USERNAME && password === TEACHER_PASSWORD) {
       localStorage.setItem('isTeacherLoggedIn', 'true');
-      navigate('/teacher-upload');
+      navigate('/teacher-dashboard');
     } else {
       setError('Invalid username or password.');
     }

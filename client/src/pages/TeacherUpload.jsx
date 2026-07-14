@@ -12,7 +12,7 @@ import {
   ModuleForm, 
   QuestionForm 
 } from '../components/TeacherComponents';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 // Updated initial question including evaluation settings and matchType in testCases
 const initialQuestion = {
@@ -68,6 +68,25 @@ export default function TeacherUpload() {
       navigate('/teacher-login');
     }
   }, []);
+
+  const [searchParams] = useSearchParams();
+
+  // Deep-link support from the Teacher Dashboard, e.g. /teacher-upload?tab=modules&labSession=1
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab === 'upload' || tab === 'manage' || tab === 'modules') {
+      setActiveTab(tab);
+    }
+    if (searchParams.get('labSession') === '1') {
+      setIsLabSession(true);
+    }
+  }, [searchParams]);
+
+  const handleLogout = () => {
+    localStorage.removeItem('isTeacherLoggedIn');
+    navigate('/teacher-login');
+  };
+
   // Initialize react-hook-form for question
   const questionForm = useForm({
     defaultValues: initialQuestion
@@ -605,8 +624,9 @@ export default function TeacherUpload() {
       <Header 
         title={isCreatingModule ? "Create Module" : isLabSession ? "Lab Session Management" : "Question Management"} 
         isTeacherPage={true}
-        backLink="/"
-        backText="Back to Home"
+        backLink="/teacher-dashboard"
+        backText="Back to Dashboard"
+        onLogout={handleLogout}
       />
       
       {/* Lab Session Toggle */}
