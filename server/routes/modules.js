@@ -8,10 +8,48 @@ import { protect, authorize } from '../middleware/auth.js';
 
 const router = express.Router();
 
+function dateKey(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function getSessionAvailabilityEnd(sessionSlot, now = new Date()) {
+  const end = new Date(now);
+  if (sessionSlot === 'FN') {
+    end.setHours(12, 30, 0, 0);
+  } else if (sessionSlot === 'AN') {
+    end.setHours(17, 0, 0, 0);
+  } else {
+    return new Date(now.getTime() + 12 * 60 * 60 * 1000);
+  }
+
+  if (end <= now) {
+    end.setDate(end.getDate() + 1);
+  }
+  return end;
+}
+
 // Create a module - with auth
 router.post('/', protect, async (req, res) => {
   try {
-    const { name, description, lab, course, questions, creator, creatorId, maxMarks, date, time, envSettings } = req.body;
+    const {
+      name,
+      description,
+      lab,
+      course,
+      questions,
+      creator,
+      creatorId,
+      maxMarks,
+      date,
+      time,
+      durationMinutes,
+      targetBatch,
+      sessionSlot,
+      envSettings
+    } = req.body;
 
     // Validate that at least one question is selected.
     if (!questions || questions.length === 0) {
@@ -27,6 +65,9 @@ router.post('/', protect, async (req, res) => {
       creator, // Now using string type instead of ObjectId
       creatorId, // Keep for backward compatibility 
       maxMarks,
+      durationMinutes: Number(durationMinutes) || 60,
+      targetBatch: targetBatch || '',
+      sessionSlot: sessionSlot || '',
       date: date || new Date(),
       time: time || '10:00 AM - 12:00 PM',
       envSettings: envSettings || {
@@ -95,7 +136,7 @@ router.get('/:id', protect, async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, lab, questions, maxMarks } = req.body;
+    const { name, description, lab, questions, maxMarks, durationMinutes, targetBatch, sessionSlot } = req.body;
     
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ error: 'Invalid module ID' });
@@ -108,7 +149,16 @@ router.put('/:id', async (req, res) => {
     
     const updatedModule = await CNModule.findByIdAndUpdate(
       id,
-      { name, description, lab, questions, maxMarks },
+      {
+        name,
+        description,
+        lab,
+        questions,
+        maxMarks,
+        durationMinutes: Number(durationMinutes) || 60,
+        targetBatch: targetBatch || '',
+        sessionSlot: sessionSlot || '',
+      },
       { new: true, runValidators: true }
     );
     
@@ -204,11 +254,25 @@ router.post('/:moduleId/assign-to-test-session', async (req, res) => {
       return res.status(404).json({ error: 'Module not found' });
     }
 
-    const slotKey = getCurrentSlotKey();
+    const targetBatch = req.body.targetBatch ?? module.targetBatch ?? '';
+    const sessionSlot = req.body.sessionSlot ?? module.sessionSlot ?? '';
+    const durationMinutes = Number(req.body.durationMinutes ?? module.durationMinutes ?? 60) || 60;
+    const slotKey = sessionSlot ? `${dateKey()}_${sessionSlot}` : getCurrentSlotKey();
+    const assignedAt = new Date();
+    const endsAt = getSessionAvailabilityEnd(sessionSlot, assignedAt);
 
     await LabAssignment.findOneAndUpdate(
       { key: 'global' },
-      { activeModule: moduleId, slotKey, assignedAt: new Date() },
+      {
+        activeModule: moduleId,
+        slotKey,
+        targetBatch,
+        sessionSlot,
+        durationMinutes,
+        assignedAt,
+        endsAt,
+        status: 'active',
+      },
       { upsert: true, new: true }
     );
 
@@ -218,6 +282,10 @@ router.post('/:moduleId/assign-to-test-session', async (req, res) => {
       moduleId,
       moduleName: module.name,
       slot: slotKey,
+      targetBatch,
+      sessionSlot,
+      durationMinutes,
+      endsAt,
     });
   } catch (err) {
     console.error('Error assigning module for testing:', err);
@@ -229,7 +297,16 @@ router.post('/active-assignment/clear', async (req, res) => {
   try {
     await LabAssignment.findOneAndUpdate(
       { key: 'global' },
-      { activeModule: null, slotKey: null, assignedAt: null },
+      {
+        activeModule: null,
+        slotKey: null,
+        targetBatch: '',
+        sessionSlot: '',
+        durationMinutes: 60,
+        assignedAt: null,
+        endsAt: null,
+        status: 'ended',
+      },
       { upsert: true }
     );
     res.status(200).json({ success: true, message: 'Active module assignment cleared' });

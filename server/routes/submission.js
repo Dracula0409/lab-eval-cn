@@ -77,6 +77,8 @@ router.post('/db', async (req, res) => {
       evaluationResults = [],
       evalError = null,
       sessionId: requestedSessionId,
+      moduleId,
+      autoSubmitted = false,
     } = req.body;
 
     if (!userId || !questionId) {
@@ -93,18 +95,38 @@ router.post('/db', async (req, res) => {
       userId,
       questionId,
       sessionId,
+      moduleId,
       sourceCode,
       language,
       passedCount,
       totalTestCases,
       evaluationResults,
       evalError,
+      autoSubmitted,
     });
 
     res.json({ success: true, submissionId: submission._id });
   } catch (err) {
     console.error('[POST] /api/submission/db error:', err);
     res.status(500).json({ error: err.message || 'Failed to save submission' });
+  }
+});
+
+router.get('/has-submission', async (req, res) => {
+  try {
+    const { userId, sessionId, moduleId } = req.query;
+    if (!userId || !sessionId) {
+      return res.status(400).json({ error: 'userId and sessionId are required' });
+    }
+
+    const filter = { userId, sessionId };
+    if (moduleId) filter.moduleId = moduleId;
+
+    const latest = await Submission.findOne(filter).sort({ createdAt: -1 }).lean();
+    res.json({ hasSubmission: !!latest, latest });
+  } catch (err) {
+    console.error('[GET] /api/submission/has-submission error:', err);
+    res.status(500).json({ error: 'Failed to check submissions' });
   }
 });
 

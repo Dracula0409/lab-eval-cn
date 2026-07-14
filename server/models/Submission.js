@@ -4,6 +4,7 @@ const submissionSchema = new mongoose.Schema({
   userId: { type: String, required: true },
   questionId: { type: String, required: true },
   sessionId: { type: String },
+  moduleId: { type: String },
   // module: { type: String, required: true },
   sourceCode: { type: Object },
   language: { type: String }, // required: true ?
@@ -12,7 +13,8 @@ const submissionSchema = new mongoose.Schema({
   evaluationResults: { type: [Object] },
   evalError: { type: String },
   score: { type: Number},
-  isBestSubmission: { type: Boolean, default: false }
+  isBestSubmission: { type: Boolean, default: false },
+  autoSubmitted: { type: Boolean, default: false }
 }, {collection: 'submissions', timestamps: true });
 
 export default mongoose.model('Submission', submissionSchema);

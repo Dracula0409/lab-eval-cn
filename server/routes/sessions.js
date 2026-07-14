@@ -5,9 +5,10 @@ import { CNModule } from '../models/Module.js';
 import User from '../models/User.js';
 import Course from '../models/Course.js';
 import LabAssignment from '../models/LabAssignment.js';
-import { getCurrentSlotKey } from '../utils/labSlot.js';
 import { protect, authorize } from '../middleware/auth.js';
 import { ensureSessionContainer } from '../controllers/sshController.js';
+import EvaluationRun from '../models/EvaluationRun.js';
+import TestAttempt from '../models/TestAttempt.js';
 
 const router = express.Router();
 
@@ -40,6 +41,203 @@ router.post('/init', async (req, res) => {
   } catch (err) {
     console.error('[API] /sessions/init error:', err);
     res.status(500).json({ error: err.message || 'Failed to start lab session' });
+  }
+});
+
+router.get('/student-dashboard/:userId', async (req, res) => {
+  try {
+    const student = await User.findOne({
+      role: 'student',
+      $or: [{ user_id: req.params.userId }, { roll_number: req.params.userId }],
+    }).select('name user_id roll_number batch mustChangePassword').lean();
+
+    if (!student) return res.status(404).json({ error: 'Student not found.' });
+
+    const now = new Date();
+    const assignment = await LabAssignment.findOne({ key: 'global' }).populate({
+      path: 'activeModule',
+      populate: { path: 'questions', model: 'Question' },
+    }).lean();
+
+    const existingAttempt = assignment?.activeModule
+      ? await TestAttempt.findOne({
+          userId: student.user_id,
+          moduleId: assignment.activeModule._id.toString(),
+          slotKey: assignment.slotKey,
+          status: 'active',
+          endsAt: { $gt: now },
+        }).lean()
+      : null;
+
+    const assignmentStillAvailable = !assignment?.endsAt || new Date(assignment.endsAt) > now;
+
+    const isActive =
+      assignment?.activeModule &&
+      assignment.status === 'active' &&
+      (assignmentStillAvailable || !!existingAttempt) &&
+      (!assignment.targetBatch || assignment.targetBatch === student.batch);
+
+    const runs = await EvaluationRun.aggregate([
+      { $match: { userId: student.user_id, runType: 'submit' } },
+      {
+        $group: {
+          _id: { moduleId: '$moduleId', sessionId: '$sessionId', slotKey: '$slotKey' },
+          lastSubmittedAt: { $max: '$createdAt' },
+          questionCount: { $addToSet: '$questionId' },
+        },
+      },
+      { $sort: { lastSubmittedAt: -1 } },
+      { $limit: 20 },
+    ]);
+
+    const moduleIds = runs.map((r) => r._id.moduleId).filter(Boolean);
+    const modules = await CNModule.find({ _id: { $in: moduleIds } }).select('name targetBatch sessionSlot durationMinutes').lean();
+    const moduleById = new Map(modules.map((m) => [m._id.toString(), m]));
+
+    res.json({
+      student,
+      activeSessions: isActive
+        ? [{
+            module: assignment.activeModule,
+            slotKey: assignment.slotKey,
+            assignedAt: assignment.assignedAt,
+            endsAt: assignment.endsAt,
+            targetBatch: assignment.targetBatch,
+            sessionSlot: assignment.sessionSlot,
+            durationMinutes: assignment.durationMinutes,
+          }]
+        : [],
+      previousTests: runs.map((r) => ({
+        moduleId: r._id.moduleId,
+        moduleName: moduleById.get(r._id.moduleId)?.name || 'CN Lab',
+        sessionId: r._id.sessionId,
+        slotKey: r._id.slotKey,
+        questionCount: r.questionCount.length,
+        lastSubmittedAt: r.lastSubmittedAt,
+      })),
+    });
+  } catch (err) {
+    console.error('[sessions] student-dashboard error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/test-attempts/start', async (req, res) => {
+  try {
+    const { userId, moduleId, sessionId } = req.body;
+    if (!userId || !moduleId) {
+      return res.status(400).json({ error: 'userId and moduleId are required.' });
+    }
+
+    const student = await User.findOne({ user_id: userId, role: 'student' }).lean();
+    if (!student) return res.status(404).json({ error: 'Student not found.' });
+
+    const assignment = await LabAssignment.findOne({
+      key: 'global',
+      activeModule: moduleId,
+      status: 'active',
+    }).populate('activeModule').lean();
+
+    if (!assignment || !assignment.activeModule) {
+      return res.status(404).json({ error: 'No active assignment found for this module.' });
+    }
+    if (assignment.targetBatch && assignment.targetBatch !== student.batch) {
+      return res.status(403).json({ error: 'This module is not assigned to your batch.' });
+    }
+    const existingAttempt = await TestAttempt.findOne({
+      userId: student.user_id,
+      moduleId,
+      slotKey: assignment.slotKey,
+      status: 'active',
+      endsAt: { $gt: new Date() },
+    });
+
+    if (assignment.endsAt && new Date(assignment.endsAt) <= new Date() && !existingAttempt) {
+      return res.status(410).json({ error: 'This lab session is no longer available.' });
+    }
+
+    const startedAt = new Date();
+    const baseEndsAt = new Date(startedAt.getTime() + (assignment.durationMinutes || 60) * 60 * 1000);
+
+    const attempt = await TestAttempt.findOneAndUpdate(
+      { userId: student.user_id, moduleId, slotKey: assignment.slotKey },
+      {
+        $setOnInsert: {
+          userId: student.user_id,
+          studentName: student.name,
+          batch: student.batch || '',
+          moduleId,
+          slotKey: assignment.slotKey,
+          sessionId: sessionId || '',
+          startedAt,
+          baseEndsAt,
+          endsAt: baseEndsAt,
+          status: 'active',
+        },
+      },
+      { upsert: true, new: true }
+    );
+
+    if (attempt.endsAt <= new Date() && attempt.status === 'active') {
+      attempt.status = 'expired';
+      await attempt.save();
+    }
+
+    res.json({
+      attempt,
+      remainingSeconds: Math.max(0, Math.floor((attempt.endsAt.getTime() - Date.now()) / 1000)),
+    });
+  } catch (err) {
+    console.error('[sessions] start test attempt error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/test-attempts', async (req, res) => {
+  try {
+    const { moduleId, slotKey, batch } = req.query;
+    const filter = {};
+    if (moduleId) filter.moduleId = moduleId;
+    if (slotKey) filter.slotKey = slotKey;
+    if (batch) filter.batch = batch;
+
+    const attempts = await TestAttempt.find(filter).sort({ batch: 1, userId: 1 }).lean();
+    res.json(attempts);
+  } catch (err) {
+    console.error('[sessions] list test attempts error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/test-attempts/extend', async (req, res) => {
+  try {
+    const { moduleId, slotKey, batch, userIds, extraMinutes } = req.body;
+    const minutes = Number(extraMinutes);
+    if (!moduleId || !slotKey || !Number.isFinite(minutes) || minutes <= 0) {
+      return res.status(400).json({ error: 'moduleId, slotKey, and positive extraMinutes are required.' });
+    }
+
+    const filter = { moduleId, slotKey };
+    const ids = Array.isArray(userIds)
+      ? userIds.map((id) => String(id).trim()).filter(Boolean)
+      : [];
+    if (ids.length) filter.userId = { $in: ids };
+    if (!ids.length && batch) filter.batch = batch;
+
+    const attempts = await TestAttempt.find(filter);
+    for (const attempt of attempts) {
+      attempt.extraMinutes = (attempt.extraMinutes || 0) + minutes;
+      attempt.endsAt = new Date(attempt.endsAt.getTime() + minutes * 60 * 1000);
+      if (attempt.status === 'expired' && attempt.endsAt > new Date()) {
+        attempt.status = 'active';
+      }
+      await attempt.save();
+    }
+
+    res.json({ success: true, updatedCount: attempts.length });
+  } catch (err) {
+    console.error('[sessions] extend attempts error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -183,6 +381,7 @@ router.patch('/modules/:id/quick-update', protect, async (req, res) => {
 // per-session.
 router.get('/:sessionId/current-module', async (req, res) => {
   try {
+    const { userId } = req.query;
     const assignment = await LabAssignment.findOne({ key: 'global' }).populate({
       path: 'activeModule',
       populate: {
@@ -195,13 +394,53 @@ router.get('/:sessionId/current-module', async (req, res) => {
       return res.status(404).json({ error: 'No module is currently assigned' });
     }
 
-    // The assignment automatically expires once the AN/FN slot it was made
-    // in has ended, unless the teacher has since reassigned for the new slot.
-    if (assignment.slotKey !== getCurrentSlotKey()) {
-      return res.status(404).json({ error: 'No module is currently assigned for this lab slot' });
+    if (assignment.status !== 'active') {
+      return res.status(404).json({ error: 'No module is currently active' });
     }
 
-    res.status(200).json(assignment.activeModule);
+    if (assignment.endsAt && new Date(assignment.endsAt) <= new Date()) {
+      const existingAttempt = userId
+        ? await TestAttempt.findOne({
+            userId,
+            moduleId: assignment.activeModule._id.toString(),
+            slotKey: assignment.slotKey,
+            status: 'active',
+            endsAt: { $gt: new Date() },
+          }).lean()
+        : null;
+      if (existingAttempt) {
+        const response = assignment.activeModule.toObject();
+        response.assignment = {
+          slotKey: assignment.slotKey,
+          targetBatch: assignment.targetBatch,
+          sessionSlot: assignment.sessionSlot,
+          durationMinutes: assignment.durationMinutes,
+          assignedAt: assignment.assignedAt,
+          endsAt: assignment.endsAt,
+        };
+        return res.status(200).json(response);
+      }
+      return res.status(404).json({ error: 'The assigned module session has ended' });
+    }
+
+    if (assignment.targetBatch && userId) {
+      const student = await User.findOne({ user_id: userId, role: 'student' }).lean();
+      if (!student || student.batch !== assignment.targetBatch) {
+        return res.status(404).json({ error: 'No module is currently assigned for your batch' });
+      }
+    }
+
+    const response = assignment.activeModule.toObject();
+    response.assignment = {
+      slotKey: assignment.slotKey,
+      targetBatch: assignment.targetBatch,
+      sessionSlot: assignment.sessionSlot,
+      durationMinutes: assignment.durationMinutes,
+      assignedAt: assignment.assignedAt,
+      endsAt: assignment.endsAt,
+    };
+
+    res.status(200).json(response);
   } catch (err) {
     console.error('Error fetching current module:', err);
     res.status(500).json({ error: err.message });
@@ -219,8 +458,10 @@ router.get('/:sessionId/check-module-update', async (req, res) => {
     }
 
     const assignment = await LabAssignment.findOne({ key: 'global' });
-    const stillInCurrentSlot = !!assignment && assignment.slotKey === getCurrentSlotKey();
-    const activeModuleId = stillInCurrentSlot && assignment.activeModule
+    const isActive = !!assignment &&
+      assignment.status === 'active' &&
+      (!assignment.endsAt || new Date(assignment.endsAt) > new Date());
+    const activeModuleId = isActive && assignment.activeModule
       ? assignment.activeModule.toString()
       : null;
     const hasUpdate = activeModuleId !== currentModuleId;

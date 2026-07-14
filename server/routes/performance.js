@@ -3,6 +3,8 @@ import User from '../models/User.js';
 import { Question } from '../models/Question.js';
 import { CNModule } from '../models/Module.js';
 import EvaluationRun from '../models/EvaluationRun.js';
+import LabAssignment from '../models/LabAssignment.js';
+import TestAttempt from '../models/TestAttempt.js';
 import {
   pickBestRun,
   buildQuestionReport,
@@ -26,8 +28,11 @@ router.get('/batches', async (req, res) => {
 // most recent first (e.g. "2026-07-13_AN")
 router.get('/slots', async (req, res) => {
   try {
-    const slots = await EvaluationRun.distinct('slotKey', { slotKey: { $nin: [null, ''] } });
-    res.json(slots.sort().reverse());
+    const [runSlots, attemptSlots] = await Promise.all([
+      EvaluationRun.distinct('slotKey', { slotKey: { $nin: [null, ''] } }),
+      TestAttempt.distinct('slotKey', { slotKey: { $nin: [null, ''] } }),
+    ]);
+    res.json([...new Set([...runSlots, ...attemptSlots])].sort().reverse());
   } catch (err) {
     console.error('[performance] slots error:', err);
     res.status(500).json({ error: err.message });
@@ -132,6 +137,19 @@ router.get('/class-csv', async (req, res) => {
 
     if (!batch) return res.status(400).json({ error: 'batch is required' });
     if (!moduleId) return res.status(400).json({ error: 'moduleId is required' });
+
+    const activeAssignment = await LabAssignment.findOne({
+      activeModule: moduleId,
+      targetBatch: batch,
+      status: 'active',
+    }).lean();
+
+    if (activeAssignment && (!activeAssignment.endsAt || new Date(activeAssignment.endsAt) > new Date())) {
+      return res.status(403).json({
+        error: 'CSV download is available only after this lab session ends.',
+        endsAt: activeAssignment.endsAt,
+      });
+    }
 
     const students = await User.find({ batch, role: 'student' })
       .sort({ roll_number: 1 })

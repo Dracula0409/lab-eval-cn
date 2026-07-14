@@ -20,6 +20,7 @@ import {
   toApiResults,
 } from '../utils/evaluationHelper.js';
 import { getCurrentSlotKey } from '../utils/labSlot.js';
+import LabAssignment from '../models/LabAssignment.js';
 
 dotenv.config();
 
@@ -369,8 +370,9 @@ function uploadStringViaConn(conn, remotePath, content) {
   });
 }
 
-function execViaConn(conn, command) {
+function execViaConn(conn, command, onLog) {
   console.log("EXEC START:", command);
+  onLog?.({ type: 'stage', message: `$ ${command}` });
 
   return new Promise((resolve, reject) => {
     let stdout = '';
@@ -385,15 +387,20 @@ function execViaConn(conn, command) {
       console.log("CHANNEL OPEN");
 
       stream.on('data', (d) => {
-        stdout += d.toString();
+        const chunk = d.toString();
+        stdout += chunk;
+        onLog?.({ type: 'stdout', message: chunk });
       });
 
       stream.stderr.on('data', (d) => {
-        stderr += d.toString();
+        const chunk = d.toString();
+        stderr += chunk;
+        onLog?.({ type: 'stderr', message: chunk });
       });
 
       stream.on('exit', (code) => {
         console.log("EXIT:", code);
+        onLog?.({ type: 'stage', message: `process exited with code ${code}` });
       });
 
       stream.on('end', () => {
@@ -421,8 +428,10 @@ export async function runAndEvaluate({
   tagPaths = {},
   sourceFiles = {},
   runType = 'evaluate',
+  onLog,
 }) {
   console.log("========== ENTERED runAndEvaluate ==========");
+  onLog?.({ type: 'stage', message: `Starting ${runType} for question ${questionId}` });
   await ensureSessionContainer(userId);
   const session = await Session.findOne({ userId }).sort({ createdAt: -1 });
   if (!session) throw new Error('No active session for user');
@@ -443,15 +452,20 @@ export async function runAndEvaluate({
 
   try {
     console.log("A writing nice.sh");
+    onLog?.({ type: 'stage', message: 'Writing nice.sh' });
     await uploadStringViaConn(conn, `${EVAL_DIR}/nice.sh`, niceScript);
     console.log("B writing testcase");
+    onLog?.({ type: 'stage', message: 'Writing testcases.json' });
     await uploadStringViaConn(conn, `${EVAL_DIR}/testcases.json`, testcasesJson);
     console.log("C upload input");
+    onLog?.({ type: 'stage', message: 'Writing input file' });
     await uploadStringViaConn(conn, `${EVAL_DIR}/input`, inputContent);
     console.log("D upload student");
+    onLog?.({ type: 'stage', message: 'Writing student.sh' });
     await uploadStringViaConn(conn, `${EVAL_DIR}/student.sh`, studentSh);
 
     console.log("E creating symlinks");
+    onLog?.({ type: 'stage', message: 'Linking student source files' });
     const fileArgs = [];
 
     for (const [tag, filePath] of Object.entries(tagPaths)) {
@@ -469,12 +483,14 @@ export async function runAndEvaluate({
     const args = fileArgs.join(' ');
 
     console.log("F chmod");
-    await execViaConn(conn, `chmod +x ${EVAL_DIR}/nice.sh`);
+    await execViaConn(conn, `chmod +x ${EVAL_DIR}/nice.sh`, onLog);
 
     console.log("G running nice.sh");
+    onLog?.({ type: 'stage', message: 'Running nice.sh' });
     const { stdout, stderr, exitCode } = await execViaConn(
       conn,
-      `cd ${EVAL_DIR} && bash nice.sh ${args}; echo "__DONE__"; exit`
+      `cd ${EVAL_DIR} && bash nice.sh ${args}; echo "__DONE__"; exit`,
+      onLog
     );
 
     console.log("H nice.sh finished");
@@ -490,6 +506,7 @@ export async function runAndEvaluate({
     const statusPath = `${EVAL_DIR}/${userId}_status.csv`;
 
     console.log("I reading csvs (evaluated, conn, status)");
+    onLog?.({ type: 'stage', message: 'Reading evaluation CSV files' });
     const { stdout: csvContent } = await execViaConn(conn, `cat ${csvPath} 2>/dev/null || true`);
     const { stdout: connCsvContent } = await execViaConn(conn, `cat ${connPath} 2>/dev/null || true`);
     const { stdout: statusCsvContent } = await execViaConn(conn, `cat ${statusPath} 2>/dev/null || true`);
@@ -502,6 +519,9 @@ export async function runAndEvaluate({
     const results = toApiResults(communicationResults);
 
     console.log("L saving mongodb");
+    const assignment = moduleId
+      ? await LabAssignment.findOne({ activeModule: moduleId, status: 'active' }).lean()
+      : null;
     const runDoc = await EvaluationRun.create({
       userId,
       studentName,
@@ -519,7 +539,7 @@ export async function runAndEvaluate({
       stdout,
       stderr,
       exitCode,
-      slotKey: getCurrentSlotKey(),
+      slotKey: assignment?.slotKey || getCurrentSlotKey(),
     });
 
     console.log("M returning");

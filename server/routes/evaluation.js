@@ -29,6 +29,19 @@ async function handleEvaluation(req, res, runType) {
 
     console.log("2. before runAndEvaluate");
 
+    const wantsStream = req.query.stream === '1';
+
+    if (wantsStream) {
+      res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.flushHeaders?.();
+    }
+
+    const sendLog = wantsStream
+      ? (event) => res.write(`${JSON.stringify({ event: 'log', ...event })}\n`)
+      : undefined;
+
     const result = await runAndEvaluate({
       userId,
       studentName,
@@ -38,14 +51,28 @@ async function handleEvaluation(req, res, runType) {
       tagPaths,
       sourceFiles,
       runType,
+      onLog: sendLog,
     });
 
     console.log("3. after runAndEvaluate");
-    res.json({ success: true, ...result });
+    if (wantsStream) {
+      res.write(`${JSON.stringify({ event: 'done', success: true, result })}\n`);
+      res.end();
+    } else {
+      res.json({ success: true, ...result });
+    }
     console.log("4. response sent");
   } catch (err) {
     console.error(`[API] evaluation/${runType} error:`, err);
-    res.status(500).json({ error: err.message });
+    if (req.query.stream === '1' && !res.headersSent) {
+      res.status(500);
+    }
+    if (req.query.stream === '1') {
+      res.write(`${JSON.stringify({ event: 'error', error: err.message })}\n`);
+      res.end();
+    } else {
+      res.status(500).json({ error: err.message });
+    }
   }
 }
 
