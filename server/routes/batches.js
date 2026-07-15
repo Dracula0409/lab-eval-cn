@@ -2,15 +2,47 @@ import express from 'express';
 import Batch from '../models/Batch.js';
 import User from '../models/User.js';
 import PasswordResetRequest from '../models/PasswordResetRequest.js';
+import { authorize, requireAuth } from '../middleware/auth.js';
 
 const router = express.Router();
+router.use(requireAuth, authorize('faculty', 'admin'));
 
-function parseStudentIds(value) {
-  if (Array.isArray(value)) return value.map(String).map((id) => id.trim()).filter(Boolean);
-  return String(value || '')
-    .split(/[\s,]+/)
-    .map((id) => id.trim())
+function parseStudents(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((student) => {
+        if (typeof student === 'object' && student) {
+          const id = String(student.id || student.user_id || '').trim();
+          return id ? { id, name: String(student.name || id).trim() } : null;
+        }
+        const id = String(student).trim();
+        return id ? { id, name: id } : null;
+      })
+      .filter(Boolean);
+  }
+
+  const lines = String(value || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
     .filter(Boolean);
+
+  const students = [];
+  for (const line of lines) {
+    if (line.includes(',')) {
+      const [rawId, ...nameParts] = line.split(',');
+      const id = rawId.trim();
+      const name = nameParts.join(',').trim() || id;
+      if (id) students.push({ id, name });
+      continue;
+    }
+
+    line.split(/\s+/)
+      .map((id) => id.trim())
+      .filter(Boolean)
+      .forEach((id) => students.push({ id, name: id }));
+  }
+
+  return students;
 }
 
 router.get('/', async (req, res) => {
@@ -27,7 +59,8 @@ router.post('/', async (req, res) => {
   try {
     const { name, defaultPassword, studentIds } = req.body;
     const batchName = String(name || '').trim().toUpperCase();
-    const ids = parseStudentIds(studentIds);
+    const parsedStudents = parseStudents(studentIds);
+    const ids = parsedStudents.map((student) => student.id);
 
     if (!batchName) return res.status(400).json({ error: 'Batch name is required.' });
     if (!defaultPassword) return res.status(400).json({ error: 'Default password is required.' });
@@ -39,19 +72,21 @@ router.post('/', async (req, res) => {
       { upsert: true, new: true, runValidators: true }
     );
 
-    const ops = ids.map((id) => ({
+    const ops = parsedStudents.map((student) => ({
       updateOne: {
-        filter: { user_id: id },
+        filter: { user_id: student.id },
         update: {
           $setOnInsert: {
-            user_id: id,
-            roll_number: id,
-            name: id,
+            user_id: student.id,
+            roll_number: student.id,
             password: defaultPassword,
             role: 'student',
             mustChangePassword: true,
           },
-          $set: { batch: batchName },
+          $set: {
+            name: student.name,
+            batch: batchName,
+          },
         },
         upsert: true,
       },
@@ -83,11 +118,12 @@ router.get('/students', async (req, res) => {
 
 router.patch('/students/:userId', async (req, res) => {
   try {
-    const { name, password, mustChangePassword } = req.body;
+    const { name, password, mustChangePassword, batch } = req.body;
     const update = {};
     if (name !== undefined) update.name = name;
     if (password) update.password = password;
     if (mustChangePassword !== undefined) update.mustChangePassword = !!mustChangePassword;
+    if (batch !== undefined) update.batch = String(batch).trim().toUpperCase();
 
     const student = await User.findOneAndUpdate(
       { user_id: req.params.userId, role: 'student' },
@@ -96,9 +132,42 @@ router.patch('/students/:userId', async (req, res) => {
     ).select('name user_id roll_number batch mustChangePassword');
 
     if (!student) return res.status(404).json({ error: 'Student not found.' });
+
+    if (batch !== undefined) {
+      await Batch.updateMany({}, { $pull: { studentIds: student.user_id } });
+      if (student.batch) {
+        await Batch.findOneAndUpdate(
+          { name: student.batch },
+          { $addToSet: { studentIds: student.user_id } },
+          { upsert: true, new: true }
+        );
+      }
+    }
+
     res.json({ success: true, student });
   } catch (err) {
     console.error('[batches] update student error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/students/:userId', async (req, res) => {
+  try {
+    const student = await User.findOneAndDelete({
+      user_id: req.params.userId,
+      role: 'student',
+    });
+
+    if (!student) return res.status(404).json({ error: 'Student not found.' });
+
+    await Batch.updateMany(
+      {},
+      { $pull: { studentIds: student.user_id } }
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[batches] delete student error:', err);
     res.status(500).json({ error: err.message });
   }
 });

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import Submission from '../models/Submission.js';
 import { getActiveSessionForUser } from '../utils/sessionHelper.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -13,9 +14,9 @@ function generateSessionId() {
   return `${year}${month}${day}_${period}`;
 }
 
-router.get('/fetch', async (req, res) => {
+router.get('/fetch', requireAuth, async (req, res) => {
   try {
-    const userId = req.query.userId;
+    const userId = req.user.user_id;
     const questionId = req.query.questionId;
     let sessionId = req.query.sessionId;
 
@@ -63,12 +64,11 @@ router.get('/fetch', async (req, res) => {
 
 
 // Save submission record after evaluation
-router.post('/db', async (req, res) => {
+router.post('/db', requireAuth, async (req, res) => {
   console.log("========== SUBMISSION ==========");
   console.log(req.body);
   try {
     const {
-      userId,
       questionId,
       sourceCode,
       language,
@@ -80,6 +80,7 @@ router.post('/db', async (req, res) => {
       moduleId,
       autoSubmitted = false,
     } = req.body;
+    const userId = req.user.user_id;
 
     if (!userId || !questionId) {
       return res.status(400).json({ error: 'userId and questionId are required' });
@@ -112,11 +113,12 @@ router.post('/db', async (req, res) => {
   }
 });
 
-router.get('/has-submission', async (req, res) => {
+router.get('/has-submission', requireAuth, async (req, res) => {
   try {
-    const { userId, sessionId, moduleId } = req.query;
-    if (!userId || !sessionId) {
-      return res.status(400).json({ error: 'userId and sessionId are required' });
+    const { sessionId, moduleId } = req.query;
+    const userId = req.user.user_id;
+    if (!sessionId) {
+      return res.status(400).json({ error: 'sessionId is required' });
     }
 
     const filter = { userId, sessionId };
@@ -132,9 +134,9 @@ router.get('/has-submission', async (req, res) => {
 
 // ========================= STUDENT ENDPOINTS =========================
 
-router.post('/evaluate/:studentId', async (req, res) => {
+router.post('/evaluate/:studentId', requireAuth, async (req, res) => {
   try {
-    const { userId } = req.params;
+    const userId = req.user.user_id;
     const { questionId, serverCode, clientCode } = req.body;
 
     if (!userId || !questionId || !serverCode || !clientCode) {
@@ -161,9 +163,9 @@ router.post('/evaluate/:studentId', async (req, res) => {
 });
 
 // Get all submissions for a student in the current session
-router.get('/student-submissions/:studentId', async (req, res) => {
+router.get('/student-submissions/:studentId', requireAuth, async (req, res) => {
   try {
-    const userId = req.params.studentId;
+    const userId = req.user.user_id;
     const sessionId = generateSessionId();
     if (!userId) return res.status(400).json({ error: 'Missing userId' });
     // Return all submissions for this student in this session

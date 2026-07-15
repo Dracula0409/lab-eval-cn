@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import Header from '../components/Header';
+import { API_BASE } from '../config';
 import {
   DocumentPlusIcon,
   PaperAirplaneIcon,
@@ -75,13 +77,15 @@ export default function TeacherDashboard() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (localStorage.getItem('isTeacherLoggedIn') !== 'true') {
-      navigate('/teacher-login');
-    }
+    axios.get(`${API_BASE}/api/auth/me`, { params: { role: 'teacher' } })
+      .then((res) => {
+        if (!['faculty', 'admin'].includes(res.data.user.role)) navigate('/teacher-login');
+      })
+      .catch(() => navigate('/teacher-login'));
   }, [navigate]);
 
-  const handleLogout = () => {
-    localStorage.removeItem('isTeacherLoggedIn');
+  const handleLogout = async () => {
+    await axios.post(`${API_BASE}/api/auth/logout`, { role: 'teacher' }).catch(() => {});
     navigate('/teacher-login');
   };
 

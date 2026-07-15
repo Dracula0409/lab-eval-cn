@@ -9,6 +9,7 @@ export default function TeacherTimeControl() {
   const [modules, setModules] = useState([]);
   const [slots, setSlots] = useState([]);
   const [batches, setBatches] = useState([]);
+  const [activeAssignments, setActiveAssignments] = useState([]);
   const [attempts, setAttempts] = useState([]);
   const [form, setForm] = useState({
     moduleId: '',
@@ -20,11 +21,15 @@ export default function TeacherTimeControl() {
   const [message, setMessage] = useState('');
 
   useEffect(() => {
-    if (localStorage.getItem('isTeacherLoggedIn') !== 'true') navigate('/teacher-login');
+    axios.get(`${API_BASE}/api/auth/me`, { params: { role: 'teacher' } })
+      .then((res) => {
+        if (!['faculty', 'admin'].includes(res.data.user.role)) navigate('/teacher-login');
+      })
+      .catch(() => navigate('/teacher-login'));
   }, [navigate]);
 
-  const handleLogout = () => {
-    localStorage.removeItem('isTeacherLoggedIn');
+  const handleLogout = async () => {
+    await axios.post(`${API_BASE}/api/auth/logout`, { role: 'teacher' }).catch(() => {});
     navigate('/teacher-login');
   };
 
@@ -33,11 +38,13 @@ export default function TeacherTimeControl() {
       axios.get(`${API_BASE}/api/modules`),
       axios.get(`${API_BASE}/api/performance/slots`),
       axios.get(`${API_BASE}/api/batches`),
+      axios.get(`${API_BASE}/api/modules/active-assignments`),
     ])
-      .then(([moduleRes, slotRes, batchRes]) => {
+      .then(([moduleRes, slotRes, batchRes, assignmentRes]) => {
         setModules(moduleRes.data || []);
         setSlots(slotRes.data || []);
         setBatches(batchRes.data || []);
+        setActiveAssignments(assignmentRes.data || []);
       })
       .catch(() => setMessage('Failed to load time extension filters.'));
   }, []);
@@ -83,6 +90,15 @@ export default function TeacherTimeControl() {
     }
   };
 
+  const selectActiveAssignment = (assignment) => {
+    setForm({
+      ...form,
+      moduleId: assignment.moduleId || '',
+      slotKey: assignment.slotKey || '',
+      batch: assignment.targetBatch || '',
+    });
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Header
@@ -97,6 +113,24 @@ export default function TeacherTimeControl() {
         <div className="max-w-5xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
           <form onSubmit={extendTime} className="bg-white border border-gray-200 rounded-lg p-5 shadow-sm space-y-4">
             <h2 className="text-base font-semibold text-gray-900">Extension Details</h2>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Active Module</label>
+              <select
+                value=""
+                onChange={(e) => {
+                  const assignment = activeAssignments.find((item) => item._id === e.target.value);
+                  if (assignment) selectActiveAssignment(assignment);
+                }}
+                className="w-full border rounded-md px-3 py-2 text-sm"
+              >
+                <option value="">Choose currently active module</option>
+                {activeAssignments.map((assignment) => (
+                  <option key={assignment._id} value={assignment._id}>
+                    {assignment.moduleName} · {assignment.slotKey} · Batch {assignment.targetBatch || 'All'}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Module</label>
               <select

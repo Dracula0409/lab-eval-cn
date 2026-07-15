@@ -1,7 +1,20 @@
 import React from 'react';
 import { PaperAirplaneIcon } from '@heroicons/react/24/outline';
 
-const SendModuleModal = ({ isOpen, onClose, sessions, selectedSessionId, setSelectedSessionId, onSend, isLoading, moduleId, modules }) => {
+const SendModuleModal = ({
+  isOpen,
+  onClose,
+  sessions,
+  selectedSessionId,
+  setSelectedSessionId,
+  onSend,
+  isLoading,
+  moduleId,
+  modules,
+  activeAssignments = [],
+  onClearAssignment,
+  onClearAllAssignments,
+}) => {
   if (!isOpen) return null;
   
   const selectedModule = moduleId && modules ? modules.find(m => m._id === moduleId) : null;
@@ -22,6 +35,9 @@ const SendModuleModal = ({ isOpen, onClose, sessions, selectedSessionId, setSele
                 {selectedModule.questions.length} question{selectedModule.questions.length !== 1 ? 's' : ''}
               </p>
               <p className="text-sm text-gray-500 mt-1">
+                Date {selectedModule.date ? new Date(selectedModule.date).toLocaleDateString() : '-'}
+              </p>
+              <p className="text-sm text-gray-500 mt-1">
                 Batch {selectedModule.targetBatch || 'All'} · {selectedModule.sessionSlot || '-'} · {selectedModule.durationMinutes || 60} minutes
               </p>
             </div>
@@ -31,6 +47,46 @@ const SendModuleModal = ({ isOpen, onClose, sessions, selectedSessionId, setSele
             <p className="text-sm text-blue-800">
               <span className="font-medium">Note:</span> This will make the module available to students in the configured batch until the test duration ends.
             </p>
+          </div>
+
+          <div className="mt-4 border rounded-md overflow-hidden">
+            <div className="px-3 py-2 bg-gray-50 flex items-center justify-between">
+              <p className="text-sm font-medium text-gray-800">Currently Active</p>
+              {!!activeAssignments.length && (
+                <button
+                  type="button"
+                  onClick={onClearAllAssignments}
+                  disabled={isLoading}
+                  className="text-xs text-red-600 hover:text-red-700 disabled:opacity-50"
+                >
+                  Clear all
+                </button>
+              )}
+            </div>
+            {activeAssignments.length ? (
+              <div className="divide-y max-h-44 overflow-y-auto">
+                {activeAssignments.map((assignment) => (
+                  <div key={assignment._id} className="px-3 py-2 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">{assignment.moduleName}</p>
+                      <p className="text-xs text-gray-500">
+                        {assignment.slotKey || '-'} · Batch {assignment.targetBatch || 'All'} · Ends {assignment.endsAt ? new Date(assignment.endsAt).toLocaleString() : '-'}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onClearAssignment?.(assignment._id)}
+                      disabled={isLoading}
+                      className="shrink-0 px-2 py-1 rounded border border-red-200 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="px-3 py-4 text-sm text-gray-500">No active modules right now.</p>
+            )}
           </div>
         </div>
         

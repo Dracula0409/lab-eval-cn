@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Panel, PanelGroup } from 'react-resizable-panels';
 import axios from 'axios';
 import Header from '../components/Header';
@@ -13,17 +13,8 @@ import { summarizeResults } from '../components/utils/testcaseHelper';
 import { InformationCircleIcon } from '@heroicons/react/24/outline';
 import { API_BASE } from '../config';
 
-// Create a hardcoded session ID for testing
-const TEST_SESSION_ID = "lab_session_" + Math.random().toString(36).substring(2, 15);
-
-// Save the session ID to localStorage if not already present
-if (!localStorage.getItem('labSessionId')) {
-  localStorage.setItem('labSessionId', TEST_SESSION_ID);
-  console.log('Created test lab session ID:', TEST_SESSION_ID);
-}
-
 // Helper function to get current lab session ID
-const getCurrentLabSession = () => localStorage.getItem('labSessionId') || TEST_SESSION_ID;
+const getCurrentLabSession = () => window.__labSessionId || '';
 const LABUSER_HOME = '/home/labuser';
 
 
@@ -125,9 +116,9 @@ const EvaluationOverlay = ({ overlay, logBoxRef, onClose }) => {
             Close
           </button>
         </div>
-        <pre
+        <div
           ref={logBoxRef}
-          className="h-96 overflow-auto bg-black text-[#f8f8f2] text-[13px] leading-5 p-4 whitespace-pre-wrap font-mono"
+          className="evaluation-terminal h-96 overflow-auto text-[13px] leading-5 p-4 whitespace-pre-wrap font-mono"
           style={{ fontFamily: 'Menlo, Monaco, Consolas, "Liberation Mono", monospace' }}
           dangerouslySetInnerHTML={{ __html: ansiToHtml(logText) }}
         />
@@ -136,10 +127,70 @@ const EvaluationOverlay = ({ overlay, logBoxRef, onClose }) => {
   );
 };
 
+const TimeUpDialog = ({ state, onExit, onReview }) => {
+  if (!state.open) return null;
+
+  const message = state.submitting
+    ? 'Time is up. We are auto-submitting your answers now. Please wait.'
+    : state.autoSubmitted
+      ? 'Time is up. Auto-submit is complete. You can review the testcase results now, then exit.'
+      : state.alreadySubmitted
+        ? 'Time is up. Your latest submission is already recorded.'
+        : 'Time is up. This attempt cannot be continued.';
+
+  return (
+    <div className="fixed inset-0 z-[1100] bg-black/45 flex items-center justify-center p-4">
+      <div className="w-full max-w-md rounded-lg bg-white border border-gray-200 shadow-2xl p-5">
+        <h2 className="text-lg font-semibold text-gray-900">Time is up</h2>
+        <p className="mt-2 text-sm text-gray-600">{message}</p>
+        {state.error && (
+          <p className="mt-3 text-sm text-red-600">{state.error}</p>
+        )}
+        <div className="mt-5 flex justify-end gap-3">
+          {state.autoSubmitted && !state.submitting && (
+            <button
+              type="button"
+              onClick={onReview}
+              className="px-4 py-2 rounded-md border border-gray-300 bg-white text-gray-700 text-sm font-medium hover:bg-gray-50"
+            >
+              Review Results
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onExit}
+            disabled={state.submitting}
+            className="px-4 py-2 rounded-md bg-indigo-600 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {state.submitting ? 'Submitting...' : 'Exit'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const TimeLockedExit = ({ show, onExit }) => {
+  if (!show) return null;
+
+  return (
+    <div className="fixed bottom-5 right-5 z-[900] rounded-lg border border-red-200 bg-white shadow-xl p-3 flex items-center gap-3">
+      <span className="text-sm font-medium text-gray-700">Time is up. Editing is locked.</span>
+      <button
+        type="button"
+        onClick={onExit}
+        className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm font-medium"
+      >
+        Exit
+      </button>
+    </div>
+  );
+};
+
 
 // Helper functions
-const getCurrentUser = () => localStorage.getItem('studentId');
-const getStudentName = () => localStorage.getItem('studentName') || getCurrentUser();
+const getCurrentUser = () => window.__authUser?.user_id || '';
+const getStudentName = () => window.__authUser?.name || getCurrentUser();
 const getCurrentDateTime = () => {
   const now = new Date();
   return now.toISOString().slice(0, 19).replace('T', ' ');
@@ -150,7 +201,11 @@ const getCurrentDateTime = () => {
 
 export default function CNLabWorkspace() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const forceFreeCoding = searchParams.get('free') === '1';
+  const requestedModuleId = searchParams.get('moduleId') || '';
   const isMobile = useIsMobile();
+  const [authReady, setAuthReady] = useState(false);
   const [activeTab, setActiveTab] = useState('question');
   const [language, setLanguage] = useState('c');
   const [showQuestion, setShowQuestion] = useState(true);
@@ -179,6 +234,14 @@ export default function CNLabWorkspace() {
     running: false,
     logs: [],
   });
+  const [timeUpDialog, setTimeUpDialog] = useState({
+    open: false,
+    submitting: false,
+    autoSubmitted: false,
+    alreadySubmitted: false,
+    error: '',
+  });
+  const [timeLocked, setTimeLocked] = useState(false);
   const panelRef = useRef(null);
   const logBoxRef = useRef(null);
   const dirtyFileIdsRef = useRef(new Set());
@@ -188,10 +251,25 @@ export default function CNLabWorkspace() {
   // const [isSubmitted, setIsSubmitted] = useState(false);
 
   useEffect(() => {
-    if (localStorage.getItem('isLoggedIn') !== 'true' || !getCurrentUser()) {
-      navigate('/login');
+    async function loadAuth() {
+      try {
+        const meRes = await axios.get(`${API_BASE}/api/auth/me`, { params: { role: 'student' } });
+        if (meRes.data.user.role !== 'student') {
+          navigate('/login');
+          return;
+        }
+        window.__authUser = meRes.data.user;
+        const sessionRes = await axios.post(`${API_BASE}/api/sessions/init`, {
+          mode: forceFreeCoding ? 'free' : 'lab',
+        });
+        window.__labSessionId = sessionRes.data.sessionId;
+        setAuthReady(true);
+      } catch {
+        navigate('/login');
+      }
     }
-  }, [navigate]);
+    loadAuth();
+  }, [navigate, forceFreeCoding]);
 
   useEffect(() => {
     console.log(currentWorkingDir);
@@ -213,19 +291,20 @@ export default function CNLabWorkspace() {
         // than relying on localStorage (which only exists on whichever
         // browser the teacher happened to click "Send to Students" from).
         const sessionId = getCurrentLabSession();
-        const userId = getCurrentUser();
 
         let moduleData = null;
-        try {
-          const currentModuleRes = await axios.get(
-            `${API_BASE}/api/sessions/${sessionId}/current-module`,
-            { params: { userId } }
-          );
-          moduleData = currentModuleRes.data;
-        } catch (moduleLookupErr) {
-          // 404 just means "no module assigned to this session yet" —
-          // expected before a teacher has sent one.
-          if (moduleLookupErr.response?.status !== 404) throw moduleLookupErr;
+        if (!forceFreeCoding) {
+          try {
+            const currentModuleRes = await axios.get(
+              `${API_BASE}/api/sessions/${sessionId}/current-module`,
+              { params: { moduleId: requestedModuleId || undefined } }
+            );
+            moduleData = currentModuleRes.data;
+          } catch (moduleLookupErr) {
+            // 404 just means "no module assigned to this session yet" —
+            // expected before a teacher has sent one.
+            if (moduleLookupErr.response?.status !== 404) throw moduleLookupErr;
+          }
         }
 
         if (moduleData) {
@@ -240,6 +319,7 @@ export default function CNLabWorkspace() {
             time: moduleData.time || "Not specified",
             date: moduleData.date,
             durationMinutes: moduleData.assignment?.durationMinutes || moduleData.durationMinutes || 60,
+            slotKey: moduleData.assignment?.slotKey || '',
             endsAt: moduleData.assignment?.endsAt || null,
             targetBatch: moduleData.assignment?.targetBatch || moduleData.targetBatch || '',
             sessionSlot: moduleData.assignment?.sessionSlot || moduleData.sessionSlot || ''
@@ -335,10 +415,11 @@ export default function CNLabWorkspace() {
       setLoadingQuestions(false);
     };
     
-    fetchModuleData();
+    if (authReady) fetchModuleData();
     
     // Set up event listener for module changes
     const handleModuleChange = () => {
+      if (forceFreeCoding) return;
       console.log('Module change detected, refreshing...');
       fetchModuleData();
       
@@ -356,10 +437,11 @@ export default function CNLabWorkspace() {
     // than watching a localStorage value that only exists on the teacher's
     // own browser.
     const checkModuleInterval = setInterval(async () => {
+      if (forceFreeCoding) return;
       try {
         const sessionId = getCurrentLabSession();
         const res = await axios.get(`${API_BASE}/api/sessions/${sessionId}/current-module`, {
-          params: { userId: getCurrentUser() },
+          params: { moduleId: requestedModuleId || undefined },
         });
         const activeModuleId = res.data?._id;
         if (activeModuleId && activeModuleId !== lastLoadedModuleIdRef.current) {
@@ -375,7 +457,7 @@ export default function CNLabWorkspace() {
       window.removeEventListener('module-change', handleModuleChange);
       clearInterval(checkModuleInterval);
     };
-  }, []);
+  }, [authReady, forceFreeCoding, requestedModuleId]);
 
   useEffect(() => {
     if (!moduleInfo?._id || moduleInfo._id === 'free_coding') return undefined;
@@ -444,9 +526,8 @@ export default function CNLabWorkspace() {
       const loadFilesForQuestion = async () => {
         const filesFromQuestion = await Promise.all((activeQuestion.files || []).map(async (f) => {
         let lang = 'plaintext';
-        if (f.name?.endsWith('.py')) lang = 'python';
+        if (f.name?.endsWith('.java')) lang = 'java';
         else if (f.name?.endsWith('.c')) lang = 'c';
-        else if (f.name?.endsWith('.js')) lang = 'javascript';
 
         const filePath = `${LABUSER_HOME}/${f.name}`;
         let code = f.precode || '';
@@ -456,7 +537,7 @@ export default function CNLabWorkspace() {
             params: {
               cwd: LABUSER_HOME,
               filename: f.name,
-              userId: getCurrentUser(),
+              sessionId: getCurrentLabSession(),
             },
           });
           code = response.data?.code ?? code;
@@ -523,11 +604,12 @@ export default function CNLabWorkspace() {
 
 
   const addNewFile = () => {
+    if (timeLocked) return;
     if(!newFileCreated){
       return;
     }
 
-    const fileName = `new_file_${fileNo}.${language === 'c' ? 'c' : language === 'python' ? 'py' : 'txt'}`;
+    const fileName = `${language === 'java' ? 'Main' : 'new_file'}_${fileNo}.${language === 'java' ? 'java' : 'c'}`;
     
     const confirmCreate = window.confirm(
       `📁 This new file will be created in:\n\n  ${currentWorkingDir}\n\nFilename: ${fileName}\n\nIf you'd like to save it elsewhere, please change the directory in your terminal first.\n\nContinue?`
@@ -540,9 +622,10 @@ export default function CNLabWorkspace() {
 
     const timestamp = Date.now();
     const newId = `file_${timestamp}`;
-    const template = language === 'c' ? 
-      `"""\nNew C File\nAuthor: ${getCurrentUser()}\nCreated: ${getCurrentDateTime()} UTC\n"""\n\n# Your code here\n` :
-      `// New ${language} file\n// Author: ${getCurrentUser()}\n// Created: ${getCurrentDateTime()} UTC\n\n`;
+    const className = fileName.replace(/\.java$/, '');
+    const template = language === 'java'
+      ? `// New Java File\n// Author: ${getCurrentUser()}\n// Created: ${getCurrentDateTime()} UTC\n\npublic class ${className} {\n    public static void main(String[] args) {\n        // Write your code here\n    }\n}\n`
+      : `// New C File\n// Author: ${getCurrentUser()}\n// Created: ${getCurrentDateTime()} UTC\n\n#include <stdio.h>\n\nint main() {\n    // Write your code here\n    return 0;\n}\n`;
 
     setFiles(prevFiles => [
       ...prevFiles, 
@@ -563,11 +646,10 @@ export default function CNLabWorkspace() {
 
 
   const openFile = async () => {
+    if (timeLocked) return;
     try {
       const response = await axios.get(`${API_BASE}/api/file/list-files`, {
-        params: { cwd: currentWorkingDir,
-                  userId: getCurrentUser()
-         }
+        params: { cwd: currentWorkingDir, sessionId: getCurrentLabSession() }
       });
       setAvailableFiles(response.data.files);
       setShowFileModal(true); // show modal
@@ -590,7 +672,7 @@ export default function CNLabWorkspace() {
 
     try {
       const res = await axios.get(`${API_BASE}/api/file/read-file`, {
-        params: { filename: selected, cwd: currentWorkingDir }
+        params: { filename: selected, cwd: currentWorkingDir, sessionId: getCurrentLabSession() }
       });
 
       const code = res.data.code;
@@ -602,7 +684,7 @@ export default function CNLabWorkspace() {
           name: selected,
           path: `${currentWorkingDir}/${selected}`,
           code,
-          language: selected.endsWith('.py') ? 'python' : 'c'
+          language: selected.endsWith('.java') ? 'java' : 'c'
         }
       ]);
       setActiveFileId(newId);
@@ -626,8 +708,10 @@ export default function CNLabWorkspace() {
 
   // Handle execution
   const handleRun = () => {
+    if (timeLocked) return;
     setIsRunning(true);
     setShowTerminal(true);
+    setActiveTab('terminal');
     const activeFile = files.find(f => f.id === activeFileId);
     if (!activeFile) {
       window.dispatchEvent(new CustomEvent('terminal-error', { detail: "No file selected" }));
@@ -640,13 +724,13 @@ export default function CNLabWorkspace() {
       : activeFile.path;
     
     setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('run-file-in-terminal', {
+      window.dispatchEvent(new CustomEvent('open-run-terminal', {
         detail: {
           code: activeFile.code,
-          userId: getCurrentUser(),
           filename: activeFile.name,
           filePath: fullPath,
-          language: activeFile.language || language
+          language: activeFile.language || language,
+          sessionId: getCurrentLabSession(),
         }
       }));
       setIsRunning(false);
@@ -655,20 +739,22 @@ export default function CNLabWorkspace() {
 
 
   const saveFile = async (file) => {
+    if (timeLocked) return;
     if (!file) return;
     try {
       setSaveStatus('saving');
       const payload = {
-        userId: getCurrentUser(),
         filename: file.name,
         filePath: file.path,
-        code: file.code
+        code: file.code,
+        sessionId: getCurrentLabSession(),
       };
 
       await fetch(`${API_BASE}/api/save-file`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        credentials: 'include',
       });
 
       setSaveStatus('saved');
@@ -680,6 +766,7 @@ export default function CNLabWorkspace() {
   };
 
   const saveActiveFile = async () => {
+    if (timeLocked) return;
     const file = files.find(f => f.id === activeFileId);
     if (!file) return;
     await saveFile(file);
@@ -712,6 +799,7 @@ export default function CNLabWorkspace() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      credentials: 'include',
     });
 
     if (!response.ok || !response.body) {
@@ -753,11 +841,29 @@ export default function CNLabWorkspace() {
   const startOrRefreshAttempt = async (moduleId) => {
     if (!moduleId || moduleId === 'free_coding') return null;
 
-    const res = await axios.post(`${API_BASE}/api/sessions/test-attempts/start`, {
-      userId: getCurrentUser(),
-      moduleId,
-      sessionId: getCurrentLabSession(),
-    });
+    let res;
+    try {
+      res = await axios.post(`${API_BASE}/api/sessions/test-attempts/start`, {
+        moduleId,
+        sessionId: getCurrentLabSession(),
+        slotKey: moduleInfo?.slotKey || undefined,
+      });
+    } catch (err) {
+      if (err.response?.status === 410) {
+        const message = err.response?.data?.error || 'Your test time is over.';
+        setAttemptInfo((prev) => ({ ...prev, remainingSeconds: 0 }));
+        setModuleError(message);
+        setTimeLocked(true);
+        setTimeUpDialog({
+          open: true,
+          submitting: false,
+          autoSubmitted: false,
+          alreadySubmitted: false,
+          error: '',
+        });
+      }
+      throw err;
+    }
 
     setAttemptInfo(res.data);
     return res.data;
@@ -768,13 +874,24 @@ export default function CNLabWorkspace() {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
         event.preventDefault();
         event.stopPropagation();
+        if (timeLocked) return;
         saveActiveFile();
       }
     };
 
     window.addEventListener('keydown', handleSaveShortcut, true);
     return () => window.removeEventListener('keydown', handleSaveShortcut, true);
-  }, [files, activeFileId]);
+  }, [files, activeFileId, timeLocked]);
+
+  useEffect(() => {
+    if (!timeLocked) return undefined;
+    const blockKeys = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    window.addEventListener('keydown', blockKeys, true);
+    return () => window.removeEventListener('keydown', blockKeys, true);
+  }, [timeLocked]);
 
   useEffect(() => {
     if (!evaluationOverlay.running) return;
@@ -791,10 +908,11 @@ export default function CNLabWorkspace() {
 
   //handle rename and code language change
   const renameFile = async (fileId, newName) => {
+    if (timeLocked) return;
     const extension = newName.split('.').pop().toLowerCase();
 
     let detectedLanguage = 'plaintext';
-    if (extension === 'py') detectedLanguage = 'python';
+    if (extension === 'java') detectedLanguage = 'java';
     else if (extension === 'c') detectedLanguage = 'c';
 
     const file = files.find(f => f.id === fileId);
@@ -827,10 +945,11 @@ export default function CNLabWorkspace() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: getCurrentUser(),
           oldPath,
-          newPath
-        })
+          newPath,
+          sessionId: getCurrentLabSession(),
+        }),
+        credentials: 'include',
       });
     } catch (err) {
       console.error('Failed to rename file in container:', err);
@@ -839,7 +958,8 @@ export default function CNLabWorkspace() {
 
 
   const updateFileLanguage = async (fileId, newLang) => {
-    const newExt = newLang === 'c' ? 'c' : newLang === 'python' ? 'py' : '';
+    if (timeLocked) return;
+    const newExt = newLang === 'java' ? 'java' : 'c';
     const file = files.find(f => f.id === fileId);
     if (!file) return;
 
@@ -870,10 +990,11 @@ export default function CNLabWorkspace() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: getCurrentUser(),
           oldPath,
-          newPath
-        })
+          newPath,
+          sessionId: getCurrentLabSession(),
+        }),
+        credentials: 'include',
       });
     } catch (err) {
       console.error('Failed to rename file in container:', err);
@@ -884,10 +1005,11 @@ export default function CNLabWorkspace() {
   const isFreeCoding = moduleInfo?._id === 'free_coding';
 
   const handleEvaluate = async () => {
+    if (timeLocked) return;
     const currentQuestion = questions[activeQuestionIdx];
     if (!currentQuestion) return;
 
-    if (useActiveFiles && Object.keys(tagToFileMap).length !== tags.length) {
+    if (Object.keys(tagToFileMap).length !== tags.length) {
       alert('Please assign a file for every tag before running evaluation.');
       return;
     }
@@ -900,10 +1022,10 @@ export default function CNLabWorkspace() {
 
       for (const file of filteredFiles) {
         await axios.post(`${API_BASE}/api/save-file`, {
-          userId: getCurrentUser(),
           filename: file.name,
           filePath: file.path,
           code: file.code,
+          sessionId: getCurrentLabSession(),
         });
       }
 
@@ -914,8 +1036,6 @@ export default function CNLabWorkspace() {
         endpoint: 'run',
         title: `Evaluating ${currentQuestion.questionKey || currentQuestion.title}`,
         payload: {
-        userId: getCurrentUser(),
-        studentName: getStudentName(),
         sessionId: getCurrentLabSession(),
         moduleId: moduleInfo?._id,
         questionId: currentQuestion.id,
@@ -958,12 +1078,14 @@ export default function CNLabWorkspace() {
 
   // Handle stopping all processes
   const handleStopAll = () => {
+    if (timeLocked) return;
     setShowTerminal(true);
     window.dispatchEvent(new CustomEvent('stop-all-processes'));
   };
 
 
   const handleSubmit = async () => {
+    if (timeLocked) return null;
     return submitQuestion(questions[activeQuestionIdx], { autoSubmitted: false, useActiveFiles: true });
   };
 
@@ -989,7 +1111,7 @@ export default function CNLabWorkspace() {
           let code = f.precode || '';
           try {
             const response = await axios.get(`${API_BASE}/api/file/read-file`, {
-              params: { cwd: LABUSER_HOME, filename: f.name, userId: getCurrentUser() },
+              params: { cwd: LABUSER_HOME, filename: f.name, sessionId: getCurrentLabSession() },
             });
             code = response.data?.code ?? code;
           } catch {
@@ -1000,7 +1122,7 @@ export default function CNLabWorkspace() {
             id: f.tag || f.name,
             name: f.name,
             path: filePath,
-            language: f.name?.endsWith('.py') ? 'python' : 'c',
+            language: f.name?.endsWith('.java') ? 'java' : 'c',
             code,
           };
         }));
@@ -1008,10 +1130,10 @@ export default function CNLabWorkspace() {
 
       for (const file of filteredFiles) {
         await axios.post(`${API_BASE}/api/save-file`, {
-          userId: getCurrentUser(),
           filename: file.name,
           filePath: file.path,
           code: file.code,
+          sessionId: getCurrentLabSession(),
         });
       }
 
@@ -1024,8 +1146,6 @@ export default function CNLabWorkspace() {
           ? `Auto-submitting ${question.questionKey || question.title}`
           : `Submitting ${question.questionKey || question.title}`,
         payload: {
-        userId: getCurrentUser(),
-        studentName: getStudentName(),
         sessionId: getCurrentLabSession(),
         moduleId: moduleInfo?._id,
         questionId: question.id,
@@ -1051,7 +1171,6 @@ export default function CNLabWorkspace() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: getCurrentUser(),
           questionId: question.id,
           sessionId: getCurrentLabSession(),
           moduleId: moduleInfo?._id,
@@ -1064,6 +1183,7 @@ export default function CNLabWorkspace() {
           evalError: results.length === 0 ? (evalRes?.stderr?.trim() || null) : null,
           autoSubmitted,
         }),
+        credentials: 'include',
       });
 
       if (!submitDbRes.ok) {
@@ -1093,33 +1213,70 @@ export default function CNLabWorkspace() {
   const handleTimeUp = async () => {
     if (autoSubmitStartedRef.current || isFreeCoding || !moduleInfo?._id) return;
     autoSubmitStartedRef.current = true;
+    setTimeLocked(true);
+    setTimeUpDialog({
+      open: true,
+      submitting: false,
+      autoSubmitted: false,
+      alreadySubmitted: false,
+      error: '',
+    });
 
     try {
       const res = await axios.get(`${API_BASE}/api/submission/has-submission`, {
         params: {
-          userId: getCurrentUser(),
           sessionId: getCurrentLabSession(),
           moduleId: moduleInfo._id,
         },
       });
 
       if (!res.data?.hasSubmission) {
-        alert("[Time] Time's up. Auto-submitting your answers now.");
+        setTimeUpDialog({
+          open: true,
+          submitting: true,
+          autoSubmitted: false,
+          alreadySubmitted: false,
+          error: '',
+        });
         for (const q of questions) {
           await submitQuestion(q, {
             autoSubmitted: true,
             useActiveFiles: q.id === questions[activeQuestionIdx]?.id,
           });
         }
+        setQuestionPaneTab('testcases');
+        setShowQuestion(true);
+        setTimeUpDialog({
+          open: true,
+          submitting: false,
+          autoSubmitted: true,
+          alreadySubmitted: false,
+          error: '',
+        });
+      } else {
+        setTimeUpDialog({
+          open: true,
+          submitting: false,
+          autoSubmitted: false,
+          alreadySubmitted: true,
+          error: '',
+        });
       }
-    } finally {
-      navigate('/student-dashboard');
+    } catch (err) {
+      setTimeUpDialog({
+        open: true,
+        submitting: false,
+        autoSubmitted: false,
+        alreadySubmitted: false,
+        error: err.response?.data?.error || err.message || 'Auto-submit could not finish.',
+      });
     }
   };
 
 
   const question = questions && questions.length > 0 ? questions[activeQuestionIdx] : undefined;
   const remainingSeconds = attemptInfo?.remainingSeconds ?? ((moduleInfo?.durationMinutes || 60) * 60);
+  const totalSeconds = attemptInfo?.totalSeconds ?? remainingSeconds;
 
 
   // Keep window.questions and window.activeQuestionIdx in sync for evaluation
@@ -1159,10 +1316,20 @@ export default function CNLabWorkspace() {
           logBoxRef={logBoxRef}
           onClose={() => setEvaluationOverlay((prev) => ({ ...prev, open: false }))}
         />
+        <TimeUpDialog
+          state={timeUpDialog}
+          onExit={() => navigate('/student-dashboard')}
+          onReview={() => setTimeUpDialog((prev) => ({ ...prev, open: false }))}
+        />
+        <TimeLockedExit
+          show={timeLocked && !timeUpDialog.open}
+          onExit={() => navigate('/student-dashboard')}
+        />
         <Header
           title={question ? question.title : 'No questions available'}
           onTimeUp={handleTimeUp}
           timeLimit={isFreeCoding ? null : remainingSeconds}
+          totalTimeLimit={isFreeCoding ? null : totalSeconds}
         />
         <MobileTabs
           activeTab={activeTab}
@@ -1209,6 +1376,7 @@ export default function CNLabWorkspace() {
           {activeTab === 'terminal' && (
             <TerminalPane
               onClose={() => setActiveTab('editor')}
+              sessionId={getCurrentLabSession()}
             />
           )}
         </div>
@@ -1226,10 +1394,20 @@ export default function CNLabWorkspace() {
         logBoxRef={logBoxRef}
         onClose={() => setEvaluationOverlay((prev) => ({ ...prev, open: false }))}
       />
+      <TimeUpDialog
+        state={timeUpDialog}
+        onExit={() => navigate('/student-dashboard')}
+        onReview={() => setTimeUpDialog((prev) => ({ ...prev, open: false }))}
+      />
+      <TimeLockedExit
+        show={timeLocked && !timeUpDialog.open}
+        onExit={() => navigate('/student-dashboard')}
+      />
       <Header
         title={moduleInfo ? moduleInfo.name : (question ? question.title : 'No questions available')}
         onTimeUp={handleTimeUp}
         timeLimit={isFreeCoding ? null : remainingSeconds}
+        totalTimeLimit={isFreeCoding ? null : totalSeconds}
         showQuestion={showQuestion}
         onToggleQuestion={() => setShowQuestion(!showQuestion)}
         moduleInfo={moduleInfo}
@@ -1327,6 +1505,7 @@ export default function CNLabWorkspace() {
               onClose={() => setShowTerminal(false)} 
               termVisible={showTerminal} 
               setCurrentWorkingDir={setCurrentWorkingDir} 
+              sessionId={getCurrentLabSession()}
             />
           </Panel>
         </PanelGroup>

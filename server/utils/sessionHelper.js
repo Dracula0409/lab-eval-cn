@@ -1,4 +1,5 @@
 import Session from '../models/Session.js';
+import { ensureSessionContainer } from '../controllers/sshController.js';
 
 /**
  * Returns the most recent session document for a user.
@@ -12,6 +13,6 @@ export async function getActiveSessionForUser(userId) {
 }
 
 export async function getContainerNameForUser(userId) {
-  const session = await getActiveSessionForUser(userId);
+  const session = await ensureSessionContainer(userId);
   return session.containerName;
 }

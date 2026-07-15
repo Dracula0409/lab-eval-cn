@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 
-export default function Timer({ duration, onExpire }) {
+export default function Timer({ duration, totalDuration, onExpire }) {
   const [timeLeft, setTimeLeft] = useState(duration);
 
   useEffect(() => {
@@ -14,7 +14,7 @@ export default function Timer({ duration, onExpire }) {
     }
 
     const timer = setInterval(() => {
-      setTimeLeft(prev => prev - 1);
+      setTimeLeft(prev => Math.max(0, prev - 1));
     }, 1000);
 
     return () => clearInterval(timer);
@@ -38,7 +38,8 @@ export default function Timer({ duration, onExpire }) {
   };
 
   const getProgressPercentage = () => {
-    return ((duration - timeLeft) / duration) * 100;
+    const total = totalDuration || duration || 1;
+    return Math.max(0, Math.min(100, (Math.max(0, timeLeft) / total) * 100));
   };
 
   const getProgressColor = () => {

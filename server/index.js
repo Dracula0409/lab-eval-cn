@@ -28,7 +28,8 @@ const allowedOrigins = [
 
 app.use(cors({
   origin : (origin, callback) => {
-    if(!origin || allowedOrigins.includes(origin)){
+    const isLocalDev = /^http:\/\/(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+):\d+$/.test(origin || '');
+    if(!origin || allowedOrigins.includes(origin) || isLocalDev){
       callback(null, true);
     }
     else{

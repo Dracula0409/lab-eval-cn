@@ -18,8 +18,6 @@ export default function TeacherLogin() {
         username: username.trim(),
         password,
       });
-      localStorage.setItem('isTeacherLoggedIn', 'true');
-      localStorage.setItem('teacherId', username.trim());
       navigate('/teacher-dashboard');
     } catch (err) {
       setError(err.response?.data?.error || 'Invalid username or password.');

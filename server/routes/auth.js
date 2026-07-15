@@ -1,6 +1,7 @@
 import express from 'express';
 import User from '../models/User.js';
 import PasswordResetRequest from '../models/PasswordResetRequest.js';
+import { clearAuthCookie, getUserFromRequest, requireAuth, setAuthCookie, signUserToken } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -8,9 +9,35 @@ const TEACHER_USER_ID = 'networklab';
 const TEACHER_PASSWORD = 'admin@123';
 const LEGACY_TEACHER_PASSWORD = 'admiin@123';
 
+function validateStudentPassword(password) {
+  if (String(password || '').length < 8) {
+    return 'Password must be at least 8 characters long.';
+  }
+  if (!/[^A-Za-z0-9]/.test(String(password))) {
+    return 'Password must include at least one special symbol.';
+  }
+  return null;
+}
+
 async function ensureTeacherUser() {
   const existing = await User.findOne({ user_id: TEACHER_USER_ID });
-  if (existing) return existing;
+  if (existing) {
+    let changed = false;
+    if (!['faculty', 'admin'].includes(existing.role)) {
+      existing.role = 'faculty';
+      changed = true;
+    }
+    if (existing.name !== 'Network Lab Teacher') {
+      existing.name = 'Network Lab Teacher';
+      changed = true;
+    }
+    if (existing.mustChangePassword) {
+      existing.mustChangePassword = false;
+      changed = true;
+    }
+    if (changed) await existing.save();
+    return existing;
+  }
 
   return User.create({
     name: 'Network Lab Teacher',
@@ -35,6 +62,7 @@ router.post('/teacher-login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid username or password.' });
     }
 
+    setAuthCookie(res, signUserToken(teacher), 'teacher');
     res.json({
       success: true,
       teacher: {
@@ -65,6 +93,7 @@ router.post('/student-login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid student ID or password.' });
     }
 
+    setAuthCookie(res, signUserToken(student), 'student');
     res.json({
       success: true,
       student: {
@@ -81,17 +110,37 @@ router.post('/student-login', async (req, res) => {
   }
 });
 
+router.get('/me', requireAuth, (req, res) => {
+  res.json({
+    user: {
+      user_id: req.user.user_id,
+      name: req.user.name,
+      roll_number: req.user.roll_number,
+      batch: req.user.batch,
+      role: req.user.role,
+      mustChangePassword: req.user.mustChangePassword,
+    },
+  });
+});
+
+router.post('/logout', (req, res) => {
+  clearAuthCookie(res, req.body?.role || req.query?.role || 'all');
+  res.json({ success: true });
+});
+
 router.post('/change-password', async (req, res) => {
   try {
     const { userId, currentPassword, newPassword, resetRequestId } = req.body;
-    if (!userId || !newPassword) {
+    const tokenUser = await getUserFromRequest(req).catch(() => null);
+    const targetUserId = tokenUser?.role === 'student' ? tokenUser.user_id : userId;
+
+    if (!targetUserId || !newPassword) {
       return res.status(400).json({ error: 'Student ID and new password are required.' });
     }
-    if (String(newPassword).length < 4) {
-      return res.status(400).json({ error: 'Password must be at least 4 characters.' });
-    }
+    const passwordError = validateStudentPassword(newPassword);
+    if (passwordError) return res.status(400).json({ error: passwordError });
 
-    const student = await User.findOne({ user_id: userId, role: 'student' });
+    const student = await User.findOne({ user_id: targetUserId, role: 'student' });
     if (!student) return res.status(404).json({ error: 'Student not found.' });
 
     let allowed = false;
@@ -100,12 +149,15 @@ router.post('/change-password', async (req, res) => {
     if (resetRequestId) {
       resetRequest = await PasswordResetRequest.findOne({
         _id: resetRequestId,
-        userId,
+        userId: targetUserId,
         status: 'approved',
       });
       allowed = !!resetRequest;
     } else {
-      allowed = currentPassword === student.password;
+      if (!tokenUser || tokenUser.user_id !== student.user_id) {
+        return res.status(401).json({ error: 'Not authenticated' });
+      }
+      allowed = student.mustChangePassword || currentPassword === student.password;
     }
 
     if (!allowed) {

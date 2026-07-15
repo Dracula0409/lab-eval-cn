@@ -5,7 +5,6 @@ import { API_BASE } from '../config';
 
 export default function Login() {
   const navigate = useNavigate();
-  const [name, setName] = useState('');
   const [studentId, setStudentId] = useState('');
   const [password, setPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -13,11 +12,16 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const validateNewPassword = (value) => {
+    if (value.length < 8) return 'Password must be at least 8 characters long.';
+    if (!/[^A-Za-z0-9]/.test(value)) return 'Password must include at least one special symbol.';
+    return '';
+  };
+
   const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
 
-    const trimmedName = name.trim();
     const trimmedId = studentId.trim();
 
     if (!trimmedId || !password) {
@@ -33,27 +37,9 @@ export default function Login() {
       });
       const student = loginRes.data.student;
 
-      const res = await axios.post(`${API_BASE}/api/sessions/init`, {
-        userId: student.user_id,
-        studentName: student.name,
-      });
+      await axios.post(`${API_BASE}/api/sessions/init`, {});
 
-      localStorage.setItem('studentId', student.user_id);
-      localStorage.setItem('studentName', student.name);
-      localStorage.setItem('studentBatch', student.batch || '');
-      localStorage.setItem('labSessionId', res.data.sessionId);
-      localStorage.setItem('isLoggedIn', 'true');
-      if (student.mustChangePassword) {
-        localStorage.setItem('pendingCurrentPassword', password);
-      } else {
-        localStorage.removeItem('pendingCurrentPassword');
-      }
-
-      if (student.mustChangePassword) {
-        navigate('/student-dashboard?changePassword=1');
-      } else {
-        navigate('/student-dashboard');
-      }
+      navigate('/student-dashboard');
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to login. Is the server running?');
     } finally {
@@ -93,6 +79,11 @@ export default function Login() {
   const setApprovedPassword = async () => {
     setError('');
     if (!resetApproved || !newPassword) return;
+    const passwordError = validateNewPassword(newPassword);
+    if (passwordError) {
+      setError(passwordError);
+      return;
+    }
     try {
       await axios.post(`${API_BASE}/api/auth/change-password`, {
         userId: resetApproved.userId,
@@ -118,19 +109,6 @@ export default function Login() {
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. John Doe"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-              autoFocus
-            />
-            <p className="text-xs text-gray-400 mt-1">Optional. Your database profile name will be used after login.</p>
-          </div>
-
-          <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Roll Number / Student ID</label>
             <input
               type="text"
@@ -138,6 +116,7 @@ export default function Login() {
               onChange={(e) => setStudentId(e.target.value)}
               placeholder="e.g. 2023103067"
               className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              autoFocus
             />
             <p className="text-xs text-gray-400 mt-1">Used in evaluation CSVs and grading export.</p>
           </div>
@@ -185,6 +164,7 @@ export default function Login() {
                 placeholder="Enter new password"
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
               />
+              <p className="text-xs text-gray-500">Minimum 8 characters with at least one special symbol.</p>
               <button onClick={setApprovedPassword} className="w-full py-2 rounded-md bg-green-600 text-white text-sm font-medium">
                 Set New Password
               </button>
@@ -194,8 +174,6 @@ export default function Login() {
 
         <p className="text-center text-xs text-gray-400 mt-6">
           <Link to="/" className="text-indigo-600 hover:underline">Back to home</Link>
-          {' · '}
-          <Link to="/teacher-upload" className="text-indigo-600 hover:underline">Teacher portal</Link>
         </p>
       </div>
     </div>

@@ -38,19 +38,23 @@ export default function TeacherPerformance() {
 
   const [searchTerm, setSearchTerm] = useState('');
   const [studentReport, setStudentReport] = useState(null);
+  const [classReport, setClassReport] = useState(null);
+  const [isClassLoading, setIsClassLoading] = useState(false);
   const [searchError, setSearchError] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [message, setMessage] = useState('');
 
   useEffect(() => {
-    if (localStorage.getItem('isTeacherLoggedIn') !== 'true') {
-      navigate('/teacher-login');
-    }
+    axios.get(`${API_BASE}/api/auth/me`, { params: { role: 'teacher' } })
+      .then((res) => {
+        if (!['faculty', 'admin'].includes(res.data.user.role)) navigate('/teacher-login');
+      })
+      .catch(() => navigate('/teacher-login'));
   }, [navigate]);
 
-  const handleLogout = () => {
-    localStorage.removeItem('isTeacherLoggedIn');
+  const handleLogout = async () => {
+    await axios.post(`${API_BASE}/api/auth/logout`, { role: 'teacher' }).catch(() => {});
     navigate('/teacher-login');
   };
 
@@ -73,6 +77,40 @@ export default function TeacherPerformance() {
   useEffect(() => {
     loadFilters();
   }, [loadFilters]);
+
+  useEffect(() => {
+    if (!selectedBatch || !selectedModuleId || !selectedSlot) {
+      setClassReport(null);
+      return;
+    }
+
+    let cancelled = false;
+    setIsClassLoading(true);
+    setMessage('');
+    axios.get(`${API_BASE}/api/performance/class-report`, {
+      params: {
+        batch: selectedBatch,
+        moduleId: selectedModuleId,
+        slot: selectedSlot,
+      },
+    })
+      .then((res) => {
+        if (!cancelled) setClassReport(res.data);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setClassReport(null);
+          setMessage(err.response?.data?.error || 'Failed to load class report.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsClassLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedBatch, selectedModuleId, selectedSlot]);
 
   const handleSearch = async (e) => {
     e?.preventDefault();
@@ -214,6 +252,60 @@ export default function TeacherPerformance() {
               {message}
             </div>
           )}
+
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+            <h2 className="text-sm font-semibold text-gray-700 mb-3">Class Report</h2>
+            {!selectedBatch || !selectedModuleId || !selectedSlot ? (
+              <p className="text-sm text-gray-500">Select session, batch, and module to show all student reports.</p>
+            ) : isClassLoading ? (
+              <p className="text-sm text-gray-500">Loading class report...</p>
+            ) : classReport?.rows?.length ? (
+              <div className="overflow-x-auto border rounded-md">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-gray-50 text-xs uppercase text-gray-500">
+                    <tr>
+                      <th className="text-left px-3 py-2">Student</th>
+                      {classReport.rows[0]?.questions?.map((q) => (
+                        <th key={q.questionId} className="text-left px-3 py-2">
+                          {q.questionKey || q.title || 'Question'}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {classReport.rows.map((row) => (
+                      <tr key={row.student.user_id}>
+                        <td className="px-3 py-2">
+                          <p className="font-medium text-gray-900">{row.student.roll_number || row.student.user_id}</p>
+                          <p className="text-xs text-gray-500">{row.student.name}</p>
+                        </td>
+                        {row.questions.map((q) => (
+                          <td key={q.questionId} className="px-3 py-2 align-top">
+                            {q.attempted ? (
+                              <div className="space-y-1">
+                                <div className="flex flex-wrap gap-1">
+                                  {q.tcVerdicts.map((value, index) => (
+                                    <span key={index} className="text-xs">
+                                      TC{index + 1}: <VerdictPill value={value} />
+                                    </span>
+                                  ))}
+                                </div>
+                                <p className="text-xs text-gray-500">Persistence: {q.persistence || '-'}</p>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-gray-400">Not attempted</span>
+                            )}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500">No students found for this selection.</p>
+            )}
+          </div>
 
           {/* Option I: Individual lookup */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">

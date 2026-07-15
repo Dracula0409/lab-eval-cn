@@ -4,7 +4,7 @@ import fs from 'fs';
 import url from 'url';
 import dotenv from 'dotenv';
 import Session from '../models/Session.js';
-import { createContainerForUser, docker } from '../docker/dockerManager.js';
+import { createContainerForUser, docker, normalizeSessionId } from '../docker/dockerManager.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Question } from '../models/Question.js';
@@ -21,6 +21,8 @@ import {
 } from '../utils/evaluationHelper.js';
 import { getCurrentSlotKey } from '../utils/labSlot.js';
 import LabAssignment from '../models/LabAssignment.js';
+import User from '../models/User.js';
+import { getUserFromRequest } from '../middleware/auth.js';
 
 dotenv.config();
 
@@ -30,8 +32,13 @@ const __dirname = path.dirname(__filename);
 
 const sessions = {}; // terminalId => { conn, stream, ws }
 
-async function createSSHConnection(userId, sshPortOverride = null) {
-  const session = await Session.findOne({ userId }).sort({ createdAt: -1 });
+async function createSSHConnection(userId, sshPortOverride = null, requestedSessionId = null) {
+  const activeSession = sshPortOverride
+    ? null
+    : await ensureSessionContainer(userId, requestedSessionId);
+  const session = sshPortOverride
+    ? await Session.findOne({ userId }).sort({ createdAt: -1 })
+    : await Session.findOne({ userId, sessionId: activeSession.sessionId });
   console.log("[SSH] Session found:", session);
   if (!session && !sshPortOverride) throw new Error('No active session for user');
   const sshPort = sshPortOverride || session.sshPort;
@@ -68,15 +75,18 @@ export function initSSHWebSocket(server) {
     }
   });
 
-  wss.on('connection', async (ws) => {
-    const { terminalId = 'main', userId: queryUserId } = ws.query;
-
-    // No real JWT auth yet — the client sends the logged-in student's ID
-    // directly. Fall back to the test user only if none was provided.
-    const userId = queryUserId;
+  wss.on('connection', async (ws, request) => {
+    const { terminalId = 'main', sessionId: requestedSessionId = null } = ws.query;
 
     try {
-      const { sshPort, sessionId } = await ensureSessionContainer(userId);
+      const user = await getUserFromRequest(request);
+      if (!user || user.role !== 'student') {
+        ws.send(JSON.stringify({ type: 'error', message: 'Not authenticated' }));
+        ws.close();
+        return;
+      }
+      const userId = user.user_id;
+      const { sshPort, sessionId } = await ensureSessionContainer(userId, requestedSessionId);
 
       let conn;
       
@@ -168,8 +178,32 @@ export function initSSHWebSocket(server) {
   });
 }
 
-export async function ensureSessionContainer(userId) {
-  const { containerName, sshPort, sessionId } = await createContainerForUser(userId);
+async function resolveContainerSessionId(userId, requestedSessionId = null) {
+  const normalizedRequested = normalizeSessionId(requestedSessionId);
+  if (normalizedRequested) return normalizedRequested;
+
+  const student = await User.findOne({ user_id: userId, role: 'student' }).select('batch').lean();
+  if (!student) return null;
+
+  const assignment = await LabAssignment.findOne({
+    status: 'active',
+    slotKey: { $nin: [null, ''] },
+    $or: [
+      { targetBatch: { $in: [null, ''] } },
+      { targetBatch: student.batch || '' },
+    ],
+  }).lean();
+
+  if (!assignment) return null;
+  if (assignment.endsAt && new Date(assignment.endsAt) <= new Date()) return null;
+  if (assignment.targetBatch && assignment.targetBatch !== student.batch) return null;
+
+  return normalizeSessionId(assignment.slotKey);
+}
+
+export async function ensureSessionContainer(userId, requestedSessionId = null) {
+  const resolvedSessionId = await resolveContainerSessionId(userId, requestedSessionId);
+  const { containerName, sshPort, sessionId } = await createContainerForUser(userId, resolvedSessionId);
 
   let sessionDoc = await Session.findOne({ userId, sessionId });
   if (!sessionDoc) {
@@ -207,10 +241,10 @@ async function ensureDirectoryExists(sftp, remotePath) {
 /**
  * upload string to file in container
  */
-async function uploadFileContent(userId, content, remotePath) {
+async function uploadFileContent(userId, content, remotePath, sessionId = null) {
   let conn;
   try {
-    conn = await createSSHConnection(userId);
+    conn = await createSSHConnection(userId, null, sessionId);
     
     return new Promise((resolve, reject) => {
       conn.sftp((err, sftp) => {
@@ -248,10 +282,10 @@ async function uploadFileContent(userId, content, remotePath) {
 /**
  * Save file to user's container via SFTP
  */
-export async function saveFileToContainer({ userId, filePath, code }) {
+export async function saveFileToContainer({ userId, filePath, code, sessionId = null }) {
   // Normalize path
   const remotePath = filePath;
-  return uploadFileContent(userId, code, remotePath);
+  return uploadFileContent(userId, code, remotePath, sessionId);
 }
 
 /**
@@ -432,8 +466,8 @@ export async function runAndEvaluate({
 }) {
   console.log("========== ENTERED runAndEvaluate ==========");
   onLog?.({ type: 'stage', message: `Starting ${runType} for question ${questionId}` });
-  await ensureSessionContainer(userId);
-  const session = await Session.findOne({ userId }).sort({ createdAt: -1 });
+  const activeSession = await ensureSessionContainer(userId, sessionId);
+  const session = await Session.findOne({ userId, sessionId: activeSession.sessionId });
   if (!session) throw new Error('No active session for user');
 
   const question = await Question.findById(questionId).lean();

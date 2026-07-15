@@ -5,6 +5,7 @@ import { CNModule } from '../models/Module.js';
 import EvaluationRun from '../models/EvaluationRun.js';
 import LabAssignment from '../models/LabAssignment.js';
 import TestAttempt from '../models/TestAttempt.js';
+import { authorize, requireAuth } from '../middleware/auth.js';
 import {
   pickBestRun,
   buildQuestionReport,
@@ -12,6 +13,7 @@ import {
 } from '../utils/performanceHelper.js';
 
 const router = express.Router();
+router.use(requireAuth, authorize('faculty', 'admin'));
 
 // GET /api/performance/batches - distinct student batches (e.g. N, P, Q)
 router.get('/batches', async (req, res) => {
@@ -127,6 +129,70 @@ router.get('/student/:userId', async (req, res) => {
   }
 });
 
+router.get('/class-report', async (req, res) => {
+  try {
+    const { batch, moduleId, slot, search } = req.query;
+
+    if (!batch) return res.status(400).json({ error: 'batch is required' });
+    if (!moduleId) return res.status(400).json({ error: 'moduleId is required' });
+
+    const studentFilter = { batch, role: 'student' };
+    if (search) {
+      const pattern = new RegExp(String(search).trim(), 'i');
+      studentFilter.$or = [
+        { user_id: pattern },
+        { roll_number: pattern },
+        { name: pattern },
+      ];
+    }
+
+    const [students, module] = await Promise.all([
+      User.find(studentFilter).select('user_id name roll_number batch').sort({ roll_number: 1 }).lean(),
+      CNModule.findById(moduleId).populate('questions').lean(),
+    ]);
+
+    if (!module) return res.status(404).json({ error: 'Module not found' });
+    const questions = module.questions || [];
+    const userIds = students.map((s) => s.user_id);
+    const questionIds = questions.map((q) => q._id.toString());
+
+    const runFilter = { userId: { $in: userIds }, questionId: { $in: questionIds } };
+    if (slot) runFilter.slotKey = slot;
+    if (moduleId) runFilter.moduleId = moduleId;
+
+    const allRuns = await EvaluationRun.find(runFilter).sort({ createdAt: -1 }).lean();
+    const runsByPair = new Map();
+    for (const run of allRuns) {
+      const key = `${run.userId}|${run.questionId}`;
+      if (!runsByPair.has(key)) runsByPair.set(key, []);
+      runsByPair.get(key).push(run);
+    }
+
+    const rows = students.map((student) => ({
+      student: {
+        user_id: student.user_id,
+        name: student.name,
+        roll_number: student.roll_number,
+        batch: student.batch,
+      },
+      questions: questions.map((question) => {
+        const runs = runsByPair.get(`${student.user_id}|${question._id.toString()}`) || [];
+        return buildQuestionReport(question, pickBestRun(runs));
+      }),
+    }));
+
+    res.json({
+      batch,
+      slot: slot || null,
+      module: { _id: module._id, name: module.name },
+      rows,
+    });
+  } catch (err) {
+    console.error('[performance] class report error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/performance/class-csv?batch=&moduleId=&slot=
 // Collective CSV report for an entire class/batch, one row per student.
 // Column layout per question block: Question, TC1..TCn, Persistence,
@@ -138,11 +204,16 @@ router.get('/class-csv', async (req, res) => {
     if (!batch) return res.status(400).json({ error: 'batch is required' });
     if (!moduleId) return res.status(400).json({ error: 'moduleId is required' });
 
-    const activeAssignment = await LabAssignment.findOne({
+    const activeAssignmentFilter = {
       activeModule: moduleId,
-      targetBatch: batch,
+      $or: [
+        { targetBatch: batch },
+        { targetBatch: { $in: [null, ''] } },
+      ],
       status: 'active',
-    }).lean();
+    };
+    if (slot) activeAssignmentFilter.slotKey = slot;
+    const activeAssignment = await LabAssignment.findOne(activeAssignmentFilter).lean();
 
     if (activeAssignment && (!activeAssignment.endsAt || new Date(activeAssignment.endsAt) > new Date())) {
       return res.status(403).json({

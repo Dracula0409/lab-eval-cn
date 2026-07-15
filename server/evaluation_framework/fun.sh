@@ -50,7 +50,6 @@ function FLUSH_TCPDUMP()
 		>transfer.log
         >transfer.hex
 
-        sleep 1
         #=- echo "parsing contents of $TCPDUMP_FILENAME  TO transfer.log && hex_transfer.log  "
         tcpdump -nn -A -r $TCPDUMP_FILENAME > transfer.log  2>/dev/null
         tcpdump -nn -r $TCPDUMP_FILENAME -xx > transfer.hex 2>/dev/null
@@ -71,7 +70,7 @@ function END_TCPDUMP()
 	>transfer.log
 	>transfer.hex
 
-	sleep 3
+	sleep 1
 	#=- echo "parsing contents of $TCPDUMP_FILENAME  TO transfer.log && hex_transfer.log  "
 	tcpdump -nn -A -r $TCPDUMP_FILENAME > transfer.log  2>/dev/null
 	tcpdump -nn -r $TCPDUMP_FILENAME -xx > transfer.hex 2>/dev/null
@@ -87,19 +86,19 @@ function EVALUATE()
 	# $3 testcase number end range
 
 	if [[ $# -lt 2 ]];then
-		#=- echo "WORNG USAGE OF EVALUATE "
-		#=- echo "EXPECTED : EVALUATE <protocol> <connection_type> <test_case>"
+		echo "WORNG USAGE OF EVALUATE "
+		echo "EXPECTED : EVALUATE <protocol> <tesatcase_start> <testcase_end>"
 		exit 0
 	fi
 
-	#=- echo "started evauating <<<<<-------------"
 	bash modi_2.sh "$Qi" "$1" 
 
-	sleep 3
+	sleep 1
 	#=- echo "started evaluating and correction"
 	
 	if [[ $# -eq 2 ]];then
 
+		echo -e "\033[34m-------------- TEST CASE $2 -------------\033[0m"
 		python3 new_evaluation.py "$student_id" "${Qi}" "testcase$2" 
 	
 	elif [[ $# -eq 3 ]];then
@@ -108,6 +107,7 @@ function EVALUATE()
 
 		for (( counti=$2 ; counti<=$3 ; counti++ ));
 		do
+			echo -e "\033[34m-------------- TEST CASE $counti -------------\033[0m"
 			python3 new_evaluation.py "$student_id" "${Qi}" "testcase$counti"
 		done
 	fi
@@ -121,10 +121,16 @@ function FLUSH_ALL()
 	#
 	# CLEARING ALL THE FILES, SO IT CAN REUSED FOR THE NEXT TESTCASE OR QUESTION
 	#
-	> connectionstatus.log
-	> flags.log
-	> hex_content.log
 	
+	# > connectionstatus.log
+	# > flags.log
+	# > hex_content.log
+	# 
+
+	rm *.log 2>/dev/null
+	rm out_* 2>/dev/null
+	rm transfer.hex transfer.pcap 2>/dev/null 
+
 }
 
 function CLEAR_ALL()
@@ -154,14 +160,15 @@ function CLEAR_ALL()
 
 	
 	if [[ $? -eq 1 ]];then
-		#=- echo -e "\033[36mSLEEPING FROM TIME WAIT\033[0m"
-		sleep 3
+		#echo -e "\033[36mSLEEPING FROM TIME WAIT\033[0m"
+		sleep 1
 	fi	
 
 	bash port_reset_Advanced.sh
     bash reset_port_timeout.sh
 
 }
+
 
 function COMPILE()
 {
@@ -290,7 +297,7 @@ function INPUT()
 
 	done < $2
 
-	sleep 1
+#	sleep 1
 }
 
 
@@ -411,7 +418,16 @@ fi
 		builtin echo "NO CONNECTEION FOUND  between {$1} and {$2}"
 		builtin echo "$1 $2 NO" >> connectionstatus.log
 		#=- echo "VERIFIED <==="
-		return 
+
+		if [[ $# -eq 5 ]];then
+			python3 conn.py "${student_id}" "$5"  
+		elif [[ $# -eq 6 ]];then
+			python3 conn.py "${student_id}" "NO"
+		
+		fi
+
+		return
+		
 	fi
 
 while IFS= read -r hex_line;
@@ -464,8 +480,16 @@ function COMPILE_RUN()
                 exit 105
         fi
 
-        gcc "$1" -o "$2"
+        if [[ "$1" == *.c ]];then
 
+        	gcc "$1" -o "$2"
+        	
+		elif [[ "$1" == *.java ]];then
+
+			javac "$1"
+		
+		fi
+		
         if [[ $? == 1 ]];then
                 echo -e "\033[31mCOMPILATION ERROR IN $1 \033[0m"
                 CLEAR_ALL
@@ -491,7 +515,20 @@ function COMPILE_RUN()
 
 	
 	### Now running the file
-        coproc "coproc_${PROGRAMS_RAN_COUNT}" { ./$2 > out_${PROGRAMS_RAN_COUNT}; }
+
+		if [[ "$1" == *.c ]];then
+
+			echo "RUNNING JAVA FILE [ ${1} ]"
+	        coproc "coproc_${PROGRAMS_RAN_COUNT}" { ./$2 > out_${PROGRAMS_RAN_COUNT}; }
+			
+		elif [[ "$1" == *.java ]];then
+
+			file_name_java="${1%.java}"
+
+			echo "RUNNING JAVA FILE [ ${file_name_java} ]"
+	        coproc "coproc_${PROGRAMS_RAN_COUNT}" { java "${file_name_java}" > out_${PROGRAMS_RAN_COUNT}; }
+		
+		fi
 
 		#echo "[ EXIT CODE OF COPROC_${PROGRAMS_RAN_COUNT} : $? ]"
 
@@ -528,7 +565,6 @@ function COMPILE_RUN()
 #		ls -l /proc/$$/fd/
         #echo -e "--->>>( $PROGRAMS_RAN_COUNT )\n"
 
-	sleep 1
 }
 
 function WAIT_PORT()
@@ -538,7 +574,7 @@ function WAIT_PORT()
 	#=- echo "|	status PORT_AVAIL:{ $s }	|" 
 	if [[ "$s" == "01" || "$s" == "0A" ]];then
 		
-		echo -e ">>> \033[36mTHE PORT:$2 IS ALREADY IN USE\033[0m <<<"
+		print ">>> \033[36mTHE PORT:$2 IS ALREADY IN USE\033[0m <<<"
 		CLEAR_ALL
 		exit 301
 	elif [[ "$s" == "05" || "$s" == "06" ]];then
@@ -572,7 +608,7 @@ function WAIT_PORT()
 			
 		done <<< "$sC"
 
-		echo -e "\033[33mSLEEPING FOR ${final_time}\033[0m"
+		echo -e "\033[33mSLEEPING FOR ${final_time} SECONDS\033[0m"
 		sleep $final_time 
 
 		cat /proc/net/tcp

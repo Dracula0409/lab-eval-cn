@@ -65,7 +65,7 @@ export default function EditorPane({
 
   const languages = [
     { value: 'c', label: 'C', icon: <WrenchIcon className="w-4 h-4 text-gray-700 inline" /> },
-    { value: 'python', label: 'Python', icon: <CodeBracketIcon className="w-4 h-4 text-green-600 inline" /> }
+    { value: 'java', label: 'Java', icon: <CodeBracketIcon className="w-4 h-4 text-orange-600 inline" /> }
   ];
 
   const themes = [

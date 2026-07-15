@@ -138,7 +138,6 @@ export default function QuestionPane({
         {activeTab === 'submissions' && (
           <div>
             <Submissions
-              userId={localStorage.getItem('studentId')}
               questionId={question.id}
               refreshTrigger={submissionRefreshTrigger}
             />

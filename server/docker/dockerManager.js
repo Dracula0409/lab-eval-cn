@@ -19,11 +19,20 @@ function generateSessionId() {
   return `${year}${month}${day}_${period}`;         
 }
 
+export function normalizeSessionId(sessionId) {
+  if (!sessionId) return null;
+  const value = String(sessionId).trim();
+  if (!value) return null;
+  const [datePart, slotPart] = value.split('_');
+  if (!datePart || !slotPart) return value.replace(/-/g, '');
+  return `${datePart.replace(/-/g, '')}_${slotPart.toUpperCase()}`;
+}
+
 /**
  * Create or reuse a Docker container for a given userId-sessionId pair.
  */
-export async function createContainerForUser(userId) {
-  const sessionId = generateSessionId();
+export async function createContainerForUser(userId, requestedSessionId = null) {
+  const sessionId = normalizeSessionId(requestedSessionId) || generateSessionId();
   const containerName = `lab_exam_${userId}_${sessionId}`;
   const volumeName = `lab_data_${userId}_${sessionId}`;
 
@@ -54,7 +63,7 @@ export async function createContainerForUser(userId) {
         console.error(`[Dockerode] Failed to restart container:`, err.message);
         // Maybe the old container is broken. Remove and recreate:
         await existingContainer.remove({ force: true });
-        return await createContainerForUser(userId); // retry creation
+        return await createContainerForUser(userId, sessionId); // retry creation
       }
     } else {
       console.log(`[Dockerode] Reusing running container ${containerName}`);

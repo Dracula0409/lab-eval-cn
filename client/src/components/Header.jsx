@@ -16,6 +16,7 @@ import {
 export default function Header({ 
   title, 
   timeLimit, 
+  totalTimeLimit,
   onTimeUp, 
   showQuestion = true, 
   onToggleQuestion,
@@ -131,12 +132,12 @@ export default function Header({
           )}
 
           {/* Timer - Only show for student pages */}
-          {!isTeacherPage && timeLimit && (
+          {!isTeacherPage && timeLimit != null && (
             <div className="flex items-center space-x-3 bg-gradient-to-r from-gray-50 to-gray-100 px-4 py-2 rounded-xl border border-gray-200/50 shadow-sm backdrop-blur-sm">
               <div className="p-1 bg-gradient-to-br from-orange-400 to-red-500 rounded-lg">
                 <ClockIcon className="w-5 h-5 text-white" />
               </div>
-              <Timer duration={timeLimit} onExpire={onTimeUp} />
+              <Timer duration={timeLimit} totalDuration={totalTimeLimit} onExpire={onTimeUp} />
             </div>
           )}
         </div>

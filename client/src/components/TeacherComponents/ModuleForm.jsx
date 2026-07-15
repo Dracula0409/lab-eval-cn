@@ -28,6 +28,7 @@ const ModuleForm = ({
         description: response.data.description || '',
         lab: response.data.lab,
         maxMarks: response.data.maxMarks,
+        date: response.data.date ? new Date(response.data.date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
         durationMinutes: response.data.durationMinutes || 60,
         targetBatch: response.data.targetBatch || '',
         sessionSlot: response.data.sessionSlot || 'AN'
@@ -54,7 +55,17 @@ const ModuleForm = ({
           )}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div>
+            <FormLabel htmlFor="moduleDate" required>Date</FormLabel>
+            <input
+              id="moduleDate"
+              type="date"
+              {...moduleForm.register('date', { required: true })}
+              className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            />
+          </div>
+
           <div>
             <FormLabel htmlFor="durationMinutes" required>Test Duration</FormLabel>
             <input

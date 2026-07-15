@@ -11,6 +11,7 @@ ENV LC_ALL=C.UTF-8
 RUN apt-get update && apt-get install -y \
     openssh-server \
     gcc g++ make \
+    openjdk-17-jdk \
     python3 python3-pip \
     iputils-ping \
     net-tools \

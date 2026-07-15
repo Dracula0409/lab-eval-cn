@@ -2,13 +2,15 @@ import { Router } from 'express';
 import { exec } from 'child_process';
 import path from 'path';
 import { ensureSessionContainer } from '../controllers/sshController.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
-router.get('/list-files', async (req, res) => {
+router.get('/list-files', requireAuth, async (req, res) => {
   try {
-    const { cwd, userId } = req.query;
-    const { containerName } = await ensureSessionContainer(userId);
+    const { cwd, sessionId } = req.query;
+    const userId = req.user.user_id;
+    const { containerName } = await ensureSessionContainer(userId, sessionId);
     const targetPath = cwd ? `${cwd}` : `/home/labuser`;
 
     exec(`docker exec ${containerName} ls ${targetPath}`, (err, stdout, stderr) => {
@@ -18,7 +20,7 @@ router.get('/list-files', async (req, res) => {
 
       const files = stdout
         .split('\n')
-        .filter(f => f.endsWith('.c') || f.endsWith('.py'));
+        .filter(f => f.endsWith('.c') || f.endsWith('.java'));
 
       res.json({ files });
     });
@@ -27,10 +29,11 @@ router.get('/list-files', async (req, res) => {
   }
 });
 
-router.get('/read-file', async (req, res) => {
+router.get('/read-file', requireAuth, async (req, res) => {
   try {
-    const { cwd, filename, userId = 'testuser123' } = req.query;
-    const { containerName } = await ensureSessionContainer(userId);
+    const { cwd, filename, sessionId } = req.query;
+    const userId = req.user.user_id;
+    const { containerName } = await ensureSessionContainer(userId, sessionId);
     const fullPath = path.posix.join(cwd || '/home/labuser', filename);
     const command = `docker exec ${containerName} cat "${fullPath}"`;
 

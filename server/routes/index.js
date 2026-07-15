@@ -11,8 +11,9 @@ import coursesRoute from './courses.js';
 import performanceRoute from './performance.js';
 import authRoute from './auth.js';
 import batchesRoute from './batches.js';
-import { saveFileToContainer } from '../controllers/sshController.js';
-import { getContainerNameForUser } from '../utils/sessionHelper.js';
+import dockerRoute from './docker.js';
+import { ensureSessionContainer, saveFileToContainer } from '../controllers/sshController.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -27,9 +28,10 @@ router.use('/courses', coursesRoute);
 router.use('/performance', performanceRoute);
 router.use('/auth', authRoute);
 router.use('/batches', batchesRoute);
+router.use('/docker', dockerRoute);
 
-async function renameFileInContainer({ userId, oldPath, newPath }) {
-  const containerName = await getContainerNameForUser(userId);
+async function renameFileInContainer({ userId, oldPath, newPath, sessionId = null }) {
+  const { containerName } = await ensureSessionContainer(userId, sessionId);
   const cmd = `mv "${oldPath}" "${newPath}"`;
 
   return new Promise((resolve, reject) => {
@@ -44,20 +46,15 @@ async function renameFileInContainer({ userId, oldPath, newPath }) {
 }
 
 // Save file to container
-router.post('/save-file', async (req, res) => {
+router.post('/save-file', requireAuth, async (req, res) => {
   try {
     // console.log('[API] save-file received:', req.body);
-    const { userId, filename, filePath, code } = req.body;
-
-    if (!userId) {
-        return res.status(400).json({
-            error: "userId is required"
-        });
-    }
+    const { filename, filePath, code, sessionId } = req.body;
+    const userId = req.user.user_id;
 
     if (!filename || !code) return res.status(400).json({ error: 'Missing filename or code' });
     console.log(filePath)
-    await saveFileToContainer({ userId, filename, filePath, code });
+    await saveFileToContainer({ userId, filename, filePath, code, sessionId });
     console.log('[API] save-file completed successfully');
     res.json({ success: true });
   } catch (err) {
@@ -66,14 +63,15 @@ router.post('/save-file', async (req, res) => {
   }
 });
 
-router.post('/rename-file', async (req, res) => {
+router.post('/rename-file', requireAuth, async (req, res) => {
   try {
-    const { userId = 'testuser123', oldPath, newPath } = req.body;
+    const { oldPath, newPath, sessionId } = req.body;
+    const userId = req.user.user_id;
     if (!oldPath || !newPath) {
       return res.status(400).json({ error: 'Missing oldPath or newPath' });
     }
 
-    await renameFileInContainer({ userId, oldPath, newPath });
+    await renameFileInContainer({ userId, oldPath, newPath, sessionId });
 
     console.log(`[API] Renamed file inside container for ${userId}`);
     res.json({ success: true });

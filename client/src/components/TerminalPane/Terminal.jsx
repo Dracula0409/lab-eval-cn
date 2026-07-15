@@ -3,16 +3,16 @@ import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import "xterm/css/xterm.css";
 import axios from 'axios';
-import { API_BASE } from '../../config';
+import { API_BASE, WS_BASE } from '../../config';
 
 const TerminalComponent = ({
   isVisible,
   isTermVisible,
   terminalId,
+  sessionId = '',
   onSessionEnd,
   initialBuffer = [], 
   onData,
-  userId,
   setCurrentWorkingDir
 }) => {
   const terminalRef = useRef(null);
@@ -26,9 +26,7 @@ const TerminalComponent = ({
   const lastSentDataRef = useRef('');
   const sessionEnded = useRef(false);
 
-  // No real JWT auth yet — fall back to the test user if nobody's logged in.
-  const effectiveUserId = localStorage.getItem('studentId');
-  const wsURL = `${API_BASE}/ws/ssh?userId=${encodeURIComponent(effectiveUserId)}&terminalId=${terminalId}`;
+  const wsURL = `${WS_BASE}/ws/ssh?terminalId=${encodeURIComponent(terminalId)}&sessionId=${encodeURIComponent(sessionId)}`;
 
   //Track current Working directory
   const requestCurrentWorkingDir = () => {
@@ -166,7 +164,7 @@ const TerminalComponent = ({
     return () => {
       isClosedManually = true;
       wsRef.current?.close();
-      xterm.current.dispose()
+      xterm.current?.dispose();
     };
   }, [terminalId, wsURL, onSessionEnd]);
 
@@ -313,52 +311,91 @@ const TerminalComponent = ({
   }, []);
 
   useEffect(() => {
-    const onRunFile = async (e) => {
-      // Only the visible terminal executes the run command
-      if (!isVisible) return;
-      const { code, filename, language, filePath } = e.detail;
-      
-      // Save file before running
+    const waitForTerminalReady = () => new Promise((resolve, reject) => {
+      let attempts = 0;
+      const timer = setInterval(() => {
+        if (xterm.current && wsRef.current?.readyState === WebSocket.OPEN) {
+          clearInterval(timer);
+          resolve();
+          return;
+        }
+        attempts += 1;
+        if (attempts > 40) {
+          clearInterval(timer);
+          reject(new Error('Terminal connection was not ready.'));
+        }
+      }, 250);
+    });
+
+    const executeRun = async (detail = {}) => {
+      const {
+        code,
+        filename,
+        language,
+        filePath,
+        sessionId: runSessionId,
+      } = detail;
+
+      if (!code || !filename) return;
+
+      try {
+        await waitForTerminalReady();
+      } catch (err) {
+        xterm.current?.writeln(`\r\n*** ${err.message} ***`);
+        return;
+      }
+
       try {
         const savePayload = {
-          userId: effectiveUserId,
           filename,
           filePath: filePath || filename,
-          code
+          code,
+          sessionId: runSessionId || sessionId,
         };
         
-        const response = await axios.post('http://localhost:5001/api/save-file', savePayload);
+        await axios.post(`${API_BASE}/api/save-file`, savePayload);
       } catch (err) {
         console.error('[Terminal] Save error:', err);
         xterm.current?.writeln(`\r\n*** Error saving file: ${err?.response?.data?.error || err.message} ***`);
         return;
-      };
-      // Ensure WS is ready
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-        xterm.current?.writeln("\r\n*** Waiting for terminal connection... ***");
-        return;
       }
+
+      const runFile = () => {
+        setTimeout(() => {
+          let runCmd = '';
+          const justFilename = filePath;
+          
+          if (language === 'java') {
+            const directory = justFilename.includes('/')
+              ? justFilename.slice(0, justFilename.lastIndexOf('/'))
+              : '.';
+            const className = justFilename
+              .slice(justFilename.lastIndexOf('/') + 1)
+              .replace(/\.java$/, '');
+            runCmd = `javac ${justFilename} && java -cp ${directory} ${className}`;
+          } else if (language === 'c') {
+            const exe = justFilename.replace(/\.c$/, '');
+            runCmd = `gcc ${justFilename} -o ${exe} && ${exe}`;
+          }
+          if (runCmd) {
+            wsRef.current.send(JSON.stringify({ type: 'input', data: `${runCmd}\n`, terminalId }));
+          }
+        }, 200);
+      };
+
       const isServerFile = /bind\(|listen\(|accept\(/.test(code);
       if (isServerFile) {
         setTimeout(runFile, 200);
       } else {
         runFile();
       }
-      
-      function runFile() {
-        setTimeout(() => {
-          let runCmd = '';
-          const justFilename = filePath;
-          
-          if (language === 'python') {
-            runCmd = `python3 -u ${justFilename}`;
-          } else if (language === 'c') {
-            const exe = justFilename.replace(/\.c$/, '');
-            runCmd = `gcc ${justFilename} -o ${exe} && ${exe}`;
-          }
-          wsRef.current.send(JSON.stringify({ type: 'input', data: `${runCmd}\n`, terminalId }));
-        }, 200);
-      }
+    };
+
+    const onRunFile = async (e) => {
+      const targetTerminalId = e.detail?.targetTerminalId;
+      if (targetTerminalId && targetTerminalId !== terminalId) return;
+      if (!targetTerminalId && !isVisible) return;
+      await executeRun(e.detail);
    };
    window.addEventListener('run-file-in-terminal', onRunFile);
 
@@ -373,7 +410,7 @@ const TerminalComponent = ({
       window.removeEventListener('run-file-in-terminal', onRunFile);
       window.removeEventListener('stop-all-processes', onStopAll);
     };
-  }, [isVisible]);
+  }, [isVisible, sessionId, terminalId]);
 
   // Autofocus and refit when terminal becomes visible (e.g. from hidden state)
   useEffect(() => {

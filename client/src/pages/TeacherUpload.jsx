@@ -38,6 +38,7 @@ const initialModule = {
   description: '',
   lab: '123',
   maxMarks: '',
+  date: new Date().toISOString().slice(0, 10),
   durationMinutes: 60,
   targetBatch: '',
   sessionSlot: 'AN'
@@ -64,15 +65,23 @@ export default function TeacherUpload() {
   const [bulkUploadStatus, setBulkUploadStatus] = useState({ total: 0, uploaded: 0, failed: 0 });
   const [isBulkUploading, setIsBulkUploading] = useState(false);
   const [batches, setBatches] = useState([]);
+  const [activeAssignments, setActiveAssignments] = useState([]);
   const [moduleDefaults, setModuleDefaults] = useState(initialModule);
+  const [teacher, setTeacher] = useState(null);
 
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (localStorage.getItem('isTeacherLoggedIn') !== 'true') {
-      navigate('/teacher-login');
-    }
-  }, []);
+    axios.get(`${API_BASE}/api/auth/me`, { params: { role: 'teacher' } })
+      .then((res) => {
+        if (!['faculty', 'admin'].includes(res.data.user.role)) {
+          navigate('/teacher-login');
+          return;
+        }
+        setTeacher(res.data.user);
+      })
+      .catch(() => navigate('/teacher-login'));
+  }, [navigate]);
 
   const [searchParams] = useSearchParams();
 
@@ -87,8 +96,8 @@ export default function TeacherUpload() {
     }
   }, [searchParams]);
 
-  const handleLogout = () => {
-    localStorage.removeItem('isTeacherLoggedIn');
+  const handleLogout = async () => {
+    await axios.post(`${API_BASE}/api/auth/logout`, { role: 'teacher' }).catch(() => {});
     navigate('/teacher-login');
   };
 
@@ -140,6 +149,15 @@ export default function TeacherUpload() {
       setModules(response.data);
     } catch (err) {
       console.error('Error fetching modules:', err);
+    }
+  };
+
+  const fetchActiveAssignments = async () => {
+    try {
+      const response = await axios.get(`${API_BASE}/api/modules/active-assignments`);
+      setActiveAssignments(response.data || []);
+    } catch (err) {
+      console.error('Error fetching active assignments:', err);
     }
   };
 
@@ -449,8 +467,9 @@ export default function TeacherUpload() {
         description: data.description,
         lab: data.lab,
         questions: selectedQuestionIds,
-        creator: "teacherId_placeholder", // Replace with authenticated teacher's id
+        creator: teacher?.user_id || 'networklab',
         maxMarks: data.maxMarks,
+        date: data.date,
         durationMinutes: data.durationMinutes,
         targetBatch: data.targetBatch,
         sessionSlot: data.sessionSlot,
@@ -494,6 +513,7 @@ export default function TeacherUpload() {
       description: module.description || '',
       lab: module.lab,
       maxMarks: module.maxMarks,
+      date: module.date ? new Date(module.date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
       durationMinutes: module.durationMinutes || 60,
       targetBatch: module.targetBatch || '',
       sessionSlot: module.sessionSlot || 'AN'
@@ -534,17 +554,22 @@ export default function TeacherUpload() {
 
   const openSendModuleModal = (moduleId) => {
     setSelectedModuleToSend(moduleId);
+    fetchActiveAssignments();
     setShowSendModuleModal(true);
   };
 
-  const clearActiveModule = async () => {
-    if (!confirm('Clear the currently sent module? Students will be free to write any program until you send a module again.')) return;
+  const clearActiveModule = async (assignmentId = null, all = false) => {
+    const prompt = all
+      ? 'Clear all currently active modules?'
+      : 'Clear this active module?';
+    if (!confirm(prompt)) return;
 
     setIsLoading(true);
     try {
-      await axios.post(`${API_BASE}/api/modules/active-assignment/clear`);
-      setMessage('Active module cleared. Students can now code freely.');
+      await axios.post(`${API_BASE}/api/modules/active-assignment/clear`, { assignmentId, all });
+      setMessage(all ? 'All active modules cleared.' : 'Active module cleared.');
       setMessageType('success');
+      await fetchActiveAssignments();
     } catch (error) {
       console.error('Error clearing active module:', error);
       setMessage(error.response?.data?.error || 'Failed to clear the active module.');
@@ -590,6 +615,7 @@ export default function TeacherUpload() {
         }));
         
         // Close the modal
+        await fetchActiveAssignments();
         setShowSendModuleModal(false);
         setSelectedModuleToSend(null);
         setSelectedSessionId('');
@@ -808,11 +834,11 @@ export default function TeacherUpload() {
                     </p>
                     <button
                       type="button"
-                      onClick={clearActiveModule}
+                      onClick={() => clearActiveModule(null, true)}
                       disabled={isLoading}
                       className="ml-4 px-3 py-1.5 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 disabled:opacity-50 whitespace-nowrap"
                     >
-                      Clear Sent Module
+                      Clear Sent Modules
                     </button>
                   </div>
                 )}
@@ -866,6 +892,9 @@ export default function TeacherUpload() {
         isLoading={isLoading}
         moduleId={selectedModuleToSend}
         modules={modules}
+        activeAssignments={activeAssignments}
+        onClearAssignment={(assignmentId) => clearActiveModule(assignmentId)}
+        onClearAllAssignments={() => clearActiveModule(null, true)}
       />
       
       {/* Bulk Upload Modal */}

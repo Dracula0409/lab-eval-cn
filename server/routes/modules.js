@@ -4,7 +4,7 @@ import Course from '../models/Course.js';
 import LabAssignment from '../models/LabAssignment.js';
 import { getCurrentSlotKey } from '../utils/labSlot.js';
 import mongoose from 'mongoose';
-import { protect, authorize } from '../middleware/auth.js';
+import { protect, authorize, requireAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -15,8 +15,9 @@ function dateKey(d = new Date()) {
   return `${y}-${m}-${day}`;
 }
 
-function getSessionAvailabilityEnd(sessionSlot, now = new Date()) {
-  const end = new Date(now);
+function getSessionAvailabilityEnd(sessionSlot, baseDate = new Date(), rollForwardIfEnded = true) {
+  const now = new Date();
+  const end = new Date(baseDate);
   if (sessionSlot === 'FN') {
     end.setHours(12, 30, 0, 0);
   } else if (sessionSlot === 'AN') {
@@ -25,14 +26,14 @@ function getSessionAvailabilityEnd(sessionSlot, now = new Date()) {
     return new Date(now.getTime() + 12 * 60 * 60 * 1000);
   }
 
-  if (end <= now) {
+  if (rollForwardIfEnded && end <= now) {
     end.setDate(end.getDate() + 1);
   }
   return end;
 }
 
 // Create a module - with auth
-router.post('/', protect, async (req, res) => {
+router.post('/', requireAuth, authorize('faculty', 'admin'), async (req, res) => {
   try {
     const {
       name,
@@ -107,6 +108,32 @@ router.get('/', protect, async (req, res) => {
   }
 });
 
+router.get('/active-assignments', requireAuth, authorize('faculty', 'admin'), async (req, res) => {
+  try {
+    const assignments = await LabAssignment.find({ status: 'active', activeModule: { $ne: null } })
+      .populate('activeModule', 'name date durationMinutes targetBatch sessionSlot maxMarks')
+      .sort({ assignedAt: -1 })
+      .lean();
+
+    res.json(assignments.map((assignment) => ({
+      _id: assignment._id,
+      key: assignment.key,
+      moduleId: assignment.activeModule?._id,
+      moduleName: assignment.activeModule?.name || 'Module',
+      slotKey: assignment.slotKey,
+      targetBatch: assignment.targetBatch || '',
+      sessionSlot: assignment.sessionSlot || '',
+      durationMinutes: assignment.durationMinutes,
+      assignedAt: assignment.assignedAt,
+      endsAt: assignment.endsAt,
+      status: assignment.status,
+    })));
+  } catch (err) {
+    console.error('Error fetching active assignments:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get a single module - with auth
 router.get('/:id', protect, async (req, res) => {
   try {
@@ -133,10 +160,10 @@ router.get('/:id', protect, async (req, res) => {
 });
 
 // Update a module
-router.put('/:id', async (req, res) => {
+router.put('/:id', requireAuth, authorize('faculty', 'admin'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, lab, questions, maxMarks, durationMinutes, targetBatch, sessionSlot } = req.body;
+    const { name, description, lab, questions, maxMarks, date, durationMinutes, targetBatch, sessionSlot } = req.body;
     
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ error: 'Invalid module ID' });
@@ -155,6 +182,7 @@ router.put('/:id', async (req, res) => {
         lab,
         questions,
         maxMarks,
+        date: date || new Date(),
         durationMinutes: Number(durationMinutes) || 60,
         targetBatch: targetBatch || '',
         sessionSlot: sessionSlot || '',
@@ -174,7 +202,7 @@ router.put('/:id', async (req, res) => {
 });
 
 // Delete a module
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requireAuth, authorize('faculty', 'admin'), async (req, res) => {
   try {
     const { id } = req.params;
     
@@ -196,7 +224,7 @@ router.delete('/:id', async (req, res) => {
 });
 
 // Quick update module for lab sessions
-router.patch('/:id/quick-update', async (req, res) => {
+router.patch('/:id/quick-update', requireAuth, authorize('faculty', 'admin'), async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
@@ -241,7 +269,7 @@ router.patch('/:id/quick-update', async (req, res) => {
 // Broadcast-assign a module to every currently active student session.
 // Used by the teacher's "Send to Students" action.
 // replace the whole assign-to-test-session route with:
-router.post('/:moduleId/assign-to-test-session', async (req, res) => {
+router.post('/:moduleId/assign-to-test-session', requireAuth, authorize('faculty', 'admin'), async (req, res) => {
   try {
     const { moduleId } = req.params;
 
@@ -257,13 +285,16 @@ router.post('/:moduleId/assign-to-test-session', async (req, res) => {
     const targetBatch = req.body.targetBatch ?? module.targetBatch ?? '';
     const sessionSlot = req.body.sessionSlot ?? module.sessionSlot ?? '';
     const durationMinutes = Number(req.body.durationMinutes ?? module.durationMinutes ?? 60) || 60;
-    const slotKey = sessionSlot ? `${dateKey()}_${sessionSlot}` : getCurrentSlotKey();
     const assignedAt = new Date();
-    const endsAt = getSessionAvailabilityEnd(sessionSlot, assignedAt);
+    const moduleDate = module.date ? new Date(module.date) : assignedAt;
+    const slotKey = sessionSlot ? `${dateKey(moduleDate)}_${sessionSlot}` : getCurrentSlotKey();
+    const endsAt = getSessionAvailabilityEnd(sessionSlot, moduleDate, !module.date);
 
+    const assignmentKey = `${moduleId}_${slotKey}_${targetBatch || 'all'}`;
     await LabAssignment.findOneAndUpdate(
-      { key: 'global' },
+      { key: assignmentKey },
       {
+        key: assignmentKey,
         activeModule: moduleId,
         slotKey,
         targetBatch,
@@ -293,22 +324,19 @@ router.post('/:moduleId/assign-to-test-session', async (req, res) => {
   }
 });
 
-router.post('/active-assignment/clear', async (req, res) => {
+router.post('/active-assignment/clear', requireAuth, authorize('faculty', 'admin'), async (req, res) => {
   try {
-    await LabAssignment.findOneAndUpdate(
-      { key: 'global' },
-      {
-        activeModule: null,
-        slotKey: null,
-        targetBatch: '',
-        sessionSlot: '',
-        durationMinutes: 60,
-        assignedAt: null,
-        endsAt: null,
-        status: 'ended',
-      },
-      { upsert: true }
-    );
+    const { assignmentId, all } = req.body || {};
+    if (all) {
+      await LabAssignment.updateMany(
+        { status: 'active' },
+        { $set: { status: 'ended' } }
+      );
+    } else if (assignmentId) {
+      await LabAssignment.findByIdAndUpdate(assignmentId, { $set: { status: 'ended' } });
+    } else {
+      await LabAssignment.findOneAndUpdate({ key: 'global' }, { $set: { status: 'ended' } });
+    }
     res.status(200).json({ success: true, message: 'Active module assignment cleared' });
   } catch (err) {
     console.error('Error clearing active assignment:', err);

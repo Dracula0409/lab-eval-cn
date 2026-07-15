@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import EvaluationRun from '../models/EvaluationRun.js';
 import { runAndEvaluate } from '../controllers/sshController.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -8,8 +9,6 @@ async function handleEvaluation(req, res, runType) {
   try {
     console.log("1. handleEvaluation entered");
     const {
-      userId = '',
-      studentName = '',
       sessionId,
       moduleId,
       questionId,
@@ -42,9 +41,13 @@ async function handleEvaluation(req, res, runType) {
       ? (event) => res.write(`${JSON.stringify({ event: 'log', ...event })}\n`)
       : undefined;
 
+    if (!req.user || req.user.role !== 'student') {
+      return res.status(403).json({ error: 'Only students can run evaluations' });
+    }
+
     const result = await runAndEvaluate({
-      userId,
-      studentName,
+      userId: req.user.user_id,
+      studentName: req.user.name,
       sessionId,
       moduleId,
       questionId,
@@ -76,9 +79,9 @@ async function handleEvaluation(req, res, runType) {
   }
 }
 
-router.post('/run', (req, res) => handleEvaluation(req, res, 'evaluate'));
+router.post('/run', requireAuth, (req, res) => handleEvaluation(req, res, 'evaluate'));
 
-router.post('/submit', (req, res) => handleEvaluation(req, res, 'submit'));
+router.post('/submit', requireAuth, (req, res) => handleEvaluation(req, res, 'submit'));
 
 router.get('/results', async (req, res) => {
   try {

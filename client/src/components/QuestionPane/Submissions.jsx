@@ -34,14 +34,14 @@ function SubmissionResults({ results = [], evalError = null }) {
   );
 }
 
-export default function Submissions({ userId, questionId, refreshTrigger = 0 }) {
+export default function Submissions({ questionId, refreshTrigger = 0 }) {
   const [submissions, setSubmissions] = useState([]);
   const [selectedSubmission, setSelectedSubmission] = useState(null);
 
   useEffect(() => {
     const fetchSubmissions = async () => {
       try {
-        const query = new URLSearchParams({ userId, questionId });
+        const query = new URLSearchParams({ questionId });
         const res = await fetch(`${API_BASE}/api/submission/fetch?${query}`);
         const data = await res.json();
         setSubmissions(Array.isArray(data) ? data : []);
@@ -51,7 +51,7 @@ export default function Submissions({ userId, questionId, refreshTrigger = 0 }) 
     };
 
     fetchSubmissions();
-  }, [userId, questionId, refreshTrigger]);
+  }, [questionId, refreshTrigger]);
 
   if (selectedSubmission) {
     return (

@@ -7,42 +7,59 @@ import { API_BASE } from '../config';
 export default function StudentDashboard() {
   const navigate = useNavigate();
   const [dashboard, setDashboard] = useState(null);
+  const [user, setUser] = useState(null);
   const [message, setMessage] = useState('');
   const [passwordForm, setPasswordForm] = useState({
-    currentPassword: localStorage.getItem('pendingCurrentPassword') || '',
+    currentPassword: '',
     newPassword: '',
   });
 
-  const userId = localStorage.getItem('studentId');
+  const validateNewPassword = (value) => {
+    if (value.length < 8) return 'Password must be at least 8 characters long.';
+    if (!/[^A-Za-z0-9]/.test(value)) return 'Password must include at least one special symbol.';
+    return '';
+  };
 
   useEffect(() => {
-    if (localStorage.getItem('isLoggedIn') !== 'true' || !userId) {
-      navigate('/login');
-      return;
+    async function loadDashboard() {
+      try {
+        const meRes = await axios.get(`${API_BASE}/api/auth/me`, { params: { role: 'student' } });
+        if (meRes.data.user.role !== 'student') {
+          navigate('/teacher-dashboard');
+          return;
+        }
+        setUser(meRes.data.user);
+        const dashboardRes = await axios.get(`${API_BASE}/api/sessions/student-dashboard`);
+        setDashboard(dashboardRes.data);
+      } catch {
+        navigate('/login');
+      }
     }
 
-    axios.get(`${API_BASE}/api/sessions/student-dashboard/${userId}`)
-      .then((res) => setDashboard(res.data))
-      .catch(() => setMessage('Failed to load dashboard.'));
-  }, [navigate, userId]);
+    loadDashboard();
+  }, [navigate]);
 
-  const logout = () => {
-    localStorage.removeItem('studentId');
-    localStorage.removeItem('studentName');
-    localStorage.removeItem('studentBatch');
-    localStorage.removeItem('labSessionId');
-    localStorage.removeItem('isLoggedIn');
+  const logout = async () => {
+    await axios.post(`${API_BASE}/api/auth/logout`, { role: 'student' }).catch(() => {});
     navigate('/login');
   };
 
-  const enterLab = async () => {
+  const enterLab = async (slotKey = '', freeCoding = false, moduleId = '') => {
+    if (!freeCoding) {
+      const ok = window.confirm(
+        'Start this lab session now? Your test timer begins as soon as you enter, and it will continue even if you reload or log out.'
+      );
+      if (!ok) return;
+    }
+
     try {
       const res = await axios.post(`${API_BASE}/api/sessions/init`, {
-        userId,
-        studentName: dashboard?.student?.name || localStorage.getItem('studentName'),
+        slotKey,
+        mode: freeCoding ? 'free' : 'lab',
       });
-      localStorage.setItem('labSessionId', res.data.sessionId);
-      navigate('/workspace');
+      window.__labSessionId = res.data.sessionId;
+      const moduleQuery = moduleId ? `?moduleId=${encodeURIComponent(moduleId)}` : '';
+      navigate(freeCoding ? '/workspace?free=1' : `/workspace${moduleQuery}`);
     } catch (err) {
       setMessage(err.response?.data?.error || 'Failed to start lab workspace.');
     }
@@ -51,16 +68,20 @@ export default function StudentDashboard() {
   const changePassword = async (e) => {
     e.preventDefault();
     setMessage('');
+    const passwordError = validateNewPassword(passwordForm.newPassword);
+    if (passwordError) {
+      setMessage(passwordError);
+      return;
+    }
     try {
       await axios.post(`${API_BASE}/api/auth/change-password`, {
-        userId,
+        userId: user?.user_id,
         currentPassword: passwordForm.currentPassword,
         newPassword: passwordForm.newPassword,
       });
       setPasswordForm({ currentPassword: '', newPassword: '' });
-      localStorage.removeItem('pendingCurrentPassword');
       setMessage('Password changed.');
-      const res = await axios.get(`${API_BASE}/api/sessions/student-dashboard/${userId}`);
+      const res = await axios.get(`${API_BASE}/api/sessions/student-dashboard`);
       setDashboard(res.data);
     } catch (err) {
       setMessage(err.response?.data?.error || 'Failed to change password.');
@@ -103,6 +124,7 @@ export default function StudentDashboard() {
                   className="border rounded-md px-3 py-2 text-sm"
                 />
               </div>
+              <p className="text-xs text-gray-500">Minimum 8 characters with at least one special symbol.</p>
               <button className="px-4 py-2 rounded-md bg-orange-600 text-white text-sm font-medium">Update Password</button>
             </form>
           )}
@@ -116,11 +138,16 @@ export default function StudentDashboard() {
                     <p className="font-medium text-gray-900">{s.module.name}</p>
                     <p className="text-sm text-gray-500">{s.slotKey} · Ends {new Date(s.endsAt).toLocaleString()}</p>
                   </div>
-                  <button onClick={enterLab} className="px-4 py-2 rounded-md bg-indigo-600 text-white text-sm font-medium">Enter Lab</button>
+                  <button onClick={() => enterLab(s.slotKey, false, s.module._id)} className="px-4 py-2 rounded-md bg-indigo-600 text-white text-sm font-medium">Enter Lab</button>
                 </div>
               ))
             ) : (
-              <p className="text-sm text-gray-500">No active lab session is assigned to your batch right now.</p>
+              <div className="flex items-center justify-between gap-4">
+                <p className="text-sm text-gray-500">No active lab session is assigned to your batch right now.</p>
+                <button onClick={() => enterLab('', true)} className="px-4 py-2 rounded-md bg-gray-900 text-white text-sm font-medium">
+                  Open Free Coding
+                </button>
+              </div>
             )}
           </div>
 
