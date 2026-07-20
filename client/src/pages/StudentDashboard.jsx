@@ -9,6 +9,7 @@ export default function StudentDashboard() {
   const [dashboard, setDashboard] = useState(null);
   const [user, setUser] = useState(null);
   const [message, setMessage] = useState('');
+  const [enteringKey, setEnteringKey] = useState('');
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: '',
     newPassword: '',
@@ -45,6 +46,7 @@ export default function StudentDashboard() {
   };
 
   const enterLab = async (slotKey = '', freeCoding = false, moduleId = '') => {
+    const key = freeCoding ? 'free' : (moduleId || slotKey || 'lab');
     if (!freeCoding) {
       const ok = window.confirm(
         'Start this lab session now? Your test timer begins as soon as you enter, and it will continue even if you reload or log out.'
@@ -53,15 +55,20 @@ export default function StudentDashboard() {
     }
 
     try {
+      setEnteringKey(key);
       const res = await axios.post(`${API_BASE}/api/sessions/init`, {
         slotKey,
         mode: freeCoding ? 'free' : 'lab',
       });
       window.__labSessionId = res.data.sessionId;
-      const moduleQuery = moduleId ? `?moduleId=${encodeURIComponent(moduleId)}` : '';
-      navigate(freeCoding ? '/workspace?free=1' : `/workspace${moduleQuery}`);
+      const params = new URLSearchParams();
+      params.set('sessionId', res.data.sessionId);
+      if (freeCoding) params.set('free', '1');
+      if (moduleId) params.set('moduleId', moduleId);
+      navigate(`/workspace?${params.toString()}`);
     } catch (err) {
       setMessage(err.response?.data?.error || 'Failed to start lab workspace.');
+      setEnteringKey('');
     }
   };
 
@@ -138,14 +145,24 @@ export default function StudentDashboard() {
                     <p className="font-medium text-gray-900">{s.module.name}</p>
                     <p className="text-sm text-gray-500">{s.slotKey} · Ends {new Date(s.endsAt).toLocaleString()}</p>
                   </div>
-                  <button onClick={() => enterLab(s.slotKey, false, s.module._id)} className="px-4 py-2 rounded-md bg-indigo-600 text-white text-sm font-medium">Enter Lab</button>
+                  <button
+                    onClick={() => enterLab(s.slotKey, false, s.module._id)}
+                    disabled={!!enteringKey}
+                    className="px-4 py-2 rounded-md bg-indigo-600 text-white text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {enteringKey === (s.module._id || s.slotKey) ? 'Starting...' : 'Enter Lab'}
+                  </button>
                 </div>
               ))
             ) : (
               <div className="flex items-center justify-between gap-4">
                 <p className="text-sm text-gray-500">No active lab session is assigned to your batch right now.</p>
-                <button onClick={() => enterLab('', true)} className="px-4 py-2 rounded-md bg-gray-900 text-white text-sm font-medium">
-                  Open Free Coding
+                <button
+                  onClick={() => enterLab('', true)}
+                  disabled={!!enteringKey}
+                  className="px-4 py-2 rounded-md bg-gray-900 text-white text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {enteringKey === 'free' ? 'Starting...' : 'Open Free Coding'}
                 </button>
               </div>
             )}

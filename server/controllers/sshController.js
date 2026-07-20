@@ -9,6 +9,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { Question } from '../models/Question.js';
 import EvaluationRun from '../models/EvaluationRun.js';
+import { getPooledConnection, evictPooledConnection } from '../utils/sshConnectionPool.js';
 import {
   EVAL_DIR,
   buildNiceScript,
@@ -30,7 +31,73 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const sessions = {}; // terminalId => { conn, stream, ws }
+const sessions = {}; // session socket key => { conn, stream, ws, userId, sessionId, terminalId }
+
+function isChannelOpenFailure(err) {
+  return err?.reason === 2 || /Channel open failure|open failed/i.test(err?.message || '');
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function closeSftp(sftp) {
+  try {
+    sftp?.end?.();
+  } catch (_) {
+    /* already closed */
+  }
+}
+
+function isTransientSshStartupError(err) {
+  return (
+    err?.level === 'client-authentication' ||
+    /All configured authentication methods failed|ECONNREFUSED|ECONNRESET|Timed out while waiting for handshake/i.test(err?.message || '')
+  );
+}
+
+function connectSshClient({ sshPort, username, privateKeyPath, label }) {
+  return new Promise((resolve, reject) => {
+    const conn = new Client();
+    let settled = false;
+
+    conn.on('ready', () => {
+      settled = true;
+      resolve(conn);
+    })
+    .on('error', (err) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      } else {
+        console.error(`[SSH] ${label} connection error:`, err);
+      }
+    })
+    .connect({
+      host: '127.0.0.1',
+      port: sshPort,
+      username,
+      privateKey: fs.readFileSync(privateKeyPath),
+      readyTimeout: 10000,
+    });
+  });
+}
+
+async function connectSshWithRetry(config, attempts = 6) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await connectSshClient(config);
+    } catch (err) {
+      lastError = err;
+      if (!isTransientSshStartupError(err) || attempt === attempts) break;
+      const delay = Math.min(250 * attempt, 1500);
+      console.warn(`[SSH] ${config.label} not ready on port ${config.sshPort}; retrying in ${delay}ms (${attempt}/${attempts})`);
+      await wait(delay);
+    }
+  }
+  throw lastError;
+}
 
 async function createSSHConnection(userId, sshPortOverride = null, requestedSessionId = null) {
   const activeSession = sshPortOverride
@@ -42,23 +109,36 @@ async function createSSHConnection(userId, sshPortOverride = null, requestedSess
   console.log("[SSH] Session found:", session);
   if (!session && !sshPortOverride) throw new Error('No active session for user');
   const sshPort = sshPortOverride || session.sshPort;
+  const poolKey = `labuser:${sshPort}`;
 
-  return new Promise((resolve, reject) => {
-    const conn = new Client();
-    conn.on('ready', () => {
-      resolve(conn);
-    })
-    .on('error', (err) => {
-      console.error('[SSH] Connection error:', err);
-      reject(err);
-    })
-    .connect({
-      host: '127.0.0.1',
-      port: sshPort,
-      username: 'labuser',                          
-      privateKey: fs.readFileSync('./labuser_key'),   
-      readyTimeout: 10000
-    });
+  // One labuser connection is reused across autosaves/exec calls for the
+  // same container instead of a fresh SSH handshake per call — see
+  // utils/sshConnectionPool.js for why this matters at scale.
+  const conn = await getPooledConnection(poolKey, () => connectSshWithRetry({
+    sshPort,
+    username: 'labuser',
+    privateKeyPath: './labuser_key',
+    label: 'labuser',
+  }));
+  conn.__poolKey = poolKey;
+  return conn;
+}
+
+/**
+ * A dedicated, non-pooled labuser connection for the interactive terminal.
+ * Deliberately NOT routed through the shared pool: a terminal shell's
+ * connection lifecycle is tied 1:1 to its WebSocket (it's ended the moment
+ * the tab closes), whereas the pool exists for short-lived, fire-and-forget
+ * operations (autosave, exec, evaluate) that outlive any single request. If
+ * these shared a connection, closing a terminal tab would kill an
+ * in-flight autosave on the same container.
+ */
+function createLabuserConnection(sshPort) {
+  return connectSshWithRetry({
+    sshPort,
+    username: 'labuser',
+    privateKeyPath: './labuser_key',
+    label: 'terminal labuser',
   });
 }
 
@@ -91,7 +171,7 @@ export function initSSHWebSocket(server) {
       let conn;
       
       try {
-        conn = await createSSHConnection(userId, sshPort);
+        conn = await createLabuserConnection(sshPort);
 
         // Request shell with explicit PTY for interactive programs
         conn.shell({
@@ -132,7 +212,8 @@ export function initSSHWebSocket(server) {
                 console.error('[WS] Invalid message format:', err);
               }
             });
-          sessions[terminalId] = { conn, stream, ws };
+          const socketKey = `${userId}:${sessionId}:${terminalId}`;
+          sessions[socketKey] = { conn, stream, ws, userId, sessionId, terminalId };
 
           // Handle incoming data from SSH
           stream.on('data', (data) => {
@@ -153,7 +234,7 @@ export function initSSHWebSocket(server) {
           const cleanup = async () => {
             stream.end();
             conn.end();
-            delete sessions[terminalId];
+            delete sessions[socketKey];
 
             if (ws.readyState === ws.OPEN) {
               ws.send(JSON.stringify({ type: 'end' }));
@@ -187,10 +268,18 @@ async function resolveContainerSessionId(userId, requestedSessionId = null) {
 
   const assignment = await LabAssignment.findOne({
     status: 'active',
-    slotKey: { $nin: [null, ''] },
     $or: [
-      { targetBatch: { $in: [null, ''] } },
-      { targetBatch: student.batch || '' },
+      { endsAt: null },
+      { endsAt: { $gt: new Date() } },
+    ],
+    slotKey: { $nin: [null, ''] },
+    $and: [
+      {
+        $or: [
+          { targetBatch: { $in: [null, ''] } },
+          { targetBatch: student.batch || '' },
+        ],
+      },
     ],
   }).lean();
 
@@ -226,6 +315,97 @@ export async function ensureSessionContainer(userId, requestedSessionId = null) 
   return { containerName, sshPort, sessionId };
 }
 
+export async function stopSessionContainer(userId, requestedSessionId) {
+  const sessionId = normalizeSessionId(requestedSessionId);
+  if (!sessionId) throw new Error('sessionId is required');
+
+  const session = await Session.findOne({ userId, sessionId });
+  const expectedContainerName = `lab_exam_${userId}_${sessionId}`;
+  const containerName = session?.containerName || expectedContainerName;
+
+  for (const [socketKey, entry] of Object.entries(sessions)) {
+    if (entry.userId === userId && entry.sessionId === sessionId) {
+      try {
+        entry.ws?.close?.();
+      } catch (_) {
+        /* socket already closed */
+      }
+      try {
+        entry.stream?.end?.();
+      } catch (_) {
+        /* stream already closed */
+      }
+      try {
+        entry.conn?.end?.();
+      } catch (_) {
+        /* connection already closed */
+      }
+      delete sessions[socketKey];
+    }
+  }
+
+  if (session?.sshPort) {
+    evictPooledConnection(`labuser:${session.sshPort}`);
+    evictPooledConnection(`networklab:${session.sshPort}`);
+  }
+
+  const containers = await docker.listContainers({ all: true });
+  const match = containers.find((info) => {
+    const names = (info.Names || []).map((name) => name.replace(/^\//, ''));
+    return names.includes(containerName) || names.includes(expectedContainerName);
+  });
+
+  if (!match) {
+    await Session.updateOne(
+      { userId, sessionId },
+      { $set: { activeSockets: [] } }
+    );
+    return {
+      success: true,
+      stopped: false,
+      reason: 'container_not_found',
+      sessionId,
+      containerName,
+      expectedContainerName,
+    };
+  }
+
+  const container = docker.getContainer(match.Id);
+  try {
+    const inspect = await container.inspect();
+    if (inspect.State?.Running) {
+      await container.stop({ t: 3 });
+    }
+  } catch (err) {
+    if (err.statusCode !== 304 && err.statusCode !== 404) throw err;
+  }
+
+  let finalInspect = null;
+  try {
+    finalInspect = await container.inspect();
+    if (finalInspect.State?.Running) {
+      await container.kill();
+      finalInspect = await container.inspect();
+    }
+  } catch (err) {
+    if (err.statusCode !== 404) throw err;
+  }
+
+  await Session.updateOne(
+    { userId, sessionId },
+    { $set: { activeSockets: [] } }
+  );
+
+  const stillRunning = !!finalInspect?.State?.Running;
+  return {
+    success: !stillRunning,
+    stopped: !stillRunning,
+    sessionId,
+    containerName: match.Names?.[0]?.replace(/^\//, '') || containerName,
+    state: finalInspect?.State?.Status || match.State,
+  };
+}
+
 async function ensureDirectoryExists(sftp, remotePath) {
   const pathParts = remotePath.split('/').slice(0, -1);
   let currentPath = '';
@@ -241,7 +421,7 @@ async function ensureDirectoryExists(sftp, remotePath) {
 /**
  * upload string to file in container
  */
-async function uploadFileContent(userId, content, remotePath, sessionId = null) {
+async function uploadFileContent(userId, content, remotePath, sessionId = null, attempt = 1) {
   let conn;
   try {
     conn = await createSSHConnection(userId, null, sessionId);
@@ -249,7 +429,6 @@ async function uploadFileContent(userId, content, remotePath, sessionId = null) 
     return new Promise((resolve, reject) => {
       conn.sftp((err, sftp) => {
         if (err) {
-          conn.end();
           return reject(err);
         }
         
@@ -257,24 +436,29 @@ async function uploadFileContent(userId, content, remotePath, sessionId = null) 
           const writeStream = sftp.createWriteStream(remotePath);
           writeStream.on('close', () => {
             console.log(`[SFTP] File content written to ${remotePath}`);
-            conn.end();
+            closeSftp(sftp);
             resolve();
           });
           writeStream.on('error', (err) => {
             console.error('[SFTP] WriteStream error:', err);
-            conn.end();
+            closeSftp(sftp);
             reject(err);
           });
           writeStream.write(content);
           writeStream.end();
         }).catch(err => {
-          conn.end();
+          closeSftp(sftp);
           reject(err);
         });
       });
     });
   } catch (err) {
-    if (conn) conn.end();
+    if (conn?.__poolKey && isChannelOpenFailure(err) && attempt < 3) {
+      console.warn(`[SFTP] Channel open failed for ${conn.__poolKey}; evicting pooled connection and retrying (${attempt}/2).`);
+      evictPooledConnection(conn.__poolKey);
+      await wait(150 * attempt);
+      return uploadFileContent(userId, content, remotePath, sessionId, attempt + 1);
+    }
     throw err;
   }
 }
@@ -291,7 +475,7 @@ export async function saveFileToContainer({ userId, filePath, code, sessionId = 
 /**
  * Upload a local file to the container
  */
-async function uploadLocalFile(userId, localPath, remotePath) {
+async function uploadLocalFile(userId, localPath, remotePath, attempt = 1) {
   let conn;
   try {
     conn = await createSSHConnection(userId);
@@ -299,13 +483,12 @@ async function uploadLocalFile(userId, localPath, remotePath) {
     return new Promise((resolve, reject) => {
       conn.sftp((err, sftp) => {
         if (err) {
-          conn.end();
           return reject(err);
         }
         
         ensureDirectoryExists(sftp, remotePath).then(() => {
           sftp.fastPut(localPath, remotePath, (err) => {
-            conn.end();
+            closeSftp(sftp);
             if (err) {
               console.error('[SFTP] Upload error:', err);
               reject(err);
@@ -315,13 +498,18 @@ async function uploadLocalFile(userId, localPath, remotePath) {
             }
           });
         }).catch(err => {
-          conn.end();
+          closeSftp(sftp);
           reject(err);
         });
       });
     });
   } catch (err) {
-    if (conn) conn.end();
+    if (conn?.__poolKey && isChannelOpenFailure(err) && attempt < 3) {
+      console.warn(`[SFTP] Channel open failed for ${conn.__poolKey}; evicting pooled connection and retrying upload (${attempt}/2).`);
+      evictPooledConnection(conn.__poolKey);
+      await wait(150 * attempt);
+      return uploadLocalFile(userId, localPath, remotePath, attempt + 1);
+    }
     throw err;
   }
 }
@@ -351,7 +539,6 @@ async function execSSH(userId, command, sshPortOverride = null) {
       
       conn.exec(command, (err, stream) => {
         if (err) {
-          conn.end();
           return reject(err);
         }
         
@@ -364,31 +551,25 @@ async function execSSH(userId, command, sshPortOverride = null) {
         });
         
         stream.on('close', (code) => {
-          conn.end();
           resolve({ stdout, stderr, exitCode: code });
         });
       });
     });
   } catch (err) {
-    if (conn) conn.end();
     throw err;
   }
 }
 
 async function createNetworklabConnection(sshPort) {
-  return new Promise((resolve, reject) => {
-    const conn = new Client();
-    conn
-      .on('ready', () => resolve(conn))
-      .on('error', reject)
-      .connect({
-        host: '127.0.0.1',
-        port: sshPort,
-        username: 'networklab',
-        privateKey: fs.readFileSync('./networklab_key'),
-        readyTimeout: 10000,
-      });
-  });
+  const poolKey = `networklab:${sshPort}`;
+  const conn = await getPooledConnection(poolKey, () => connectSshWithRetry({
+    sshPort,
+    username: 'networklab',
+    privateKeyPath: './networklab_key',
+    label: 'networklab',
+  }));
+  conn.__poolKey = poolKey;
+  return conn;
 }
 
 function uploadStringViaConn(conn, remotePath, content) {
@@ -396,8 +577,14 @@ function uploadStringViaConn(conn, remotePath, content) {
     conn.sftp((err, sftp) => {
       if (err) return reject(err);
       const ws = sftp.createWriteStream(remotePath);
-      ws.on('close', resolve);
-      ws.on('error', reject);
+      ws.on('close', () => {
+        closeSftp(sftp);
+        resolve();
+      });
+      ws.on('error', (err) => {
+        closeSftp(sftp);
+        reject(err);
+      });
       ws.write(content ?? '');
       ws.end();
     });
@@ -498,6 +685,7 @@ export async function runAndEvaluate({
     onLog?.({ type: 'stage', message: 'Writing student.sh' });
     await uploadStringViaConn(conn, `${EVAL_DIR}/student.sh`, studentSh);
 
+    /*
     console.log("E creating symlinks");
     onLog?.({ type: 'stage', message: 'Linking student source files' });
     const fileArgs = [];
@@ -512,6 +700,26 @@ export async function runAndEvaluate({
       );
 
       fileArgs.push(`"${EVAL_DIR}/${taggedName}"`);
+    }
+
+    const args = fileArgs.join(' ');
+    */
+   
+    // Instead of symlinks, copy the files to the evaluation directory
+    console.log("E copying source files");
+    onLog?.({ type: 'stage', message: 'Copying student source files' });
+
+    const fileArgs = [];
+
+    for (const filePath of Object.values(tagPaths)) {
+      const fileName = path.posix.basename(filePath);
+
+      await execViaConn(
+        conn,
+        `cp -f "${filePath}" "${EVAL_DIR}/${fileName}"`
+      );
+
+      fileArgs.push(`"${fileName}"`);
     }
 
     const args = fileArgs.join(' ');
@@ -554,7 +762,14 @@ export async function runAndEvaluate({
 
     console.log("L saving mongodb");
     const assignment = moduleId
-      ? await LabAssignment.findOne({ activeModule: moduleId, status: 'active' }).lean()
+      ? await LabAssignment.findOne({
+          activeModule: moduleId,
+          status: 'active',
+          $or: [
+            { endsAt: null },
+            { endsAt: { $gt: new Date() } },
+          ],
+        }).lean()
       : null;
     const runDoc = await EvaluationRun.create({
       userId,
@@ -587,8 +802,12 @@ export async function runAndEvaluate({
       stderr,
       exitCode,
     };
-  } finally {
-    conn.end();
+  } catch (err) {
+    // A genuine failure here might mean the connection itself is bad
+    // (container restarted mid-run, etc.) — evict it so the next attempt
+    // gets a fresh connection instead of retrying against a dead one.
+    evictPooledConnection(`networklab:${session.sshPort}`);
+    throw err;
   }
 }
 
@@ -648,25 +867,35 @@ export async function runEvaluation(userId, questionId, serverCode, clientCode) 
   }
 }
 // Helper: Read file content from container via SFTP
-async function readFileFromContainer(userId, remotePath) {
+async function readFileFromContainer(userId, remotePath, attempt = 1) {
   let conn;
   try {
     conn = await createSSHConnection(userId);
     return new Promise((resolve, reject) => {
       conn.sftp((err, sftp) => {
         if (err) {
-          conn.end();
           return reject(err);
         }
         let data = '';
         const stream = sftp.createReadStream(remotePath);
         stream.on('data', chunk => { data += chunk.toString(); });
-        stream.on('end', () => { conn.end(); resolve(data); });
-        stream.on('error', err => { conn.end(); reject(err); });
+        stream.on('end', () => {
+          closeSftp(sftp);
+          resolve(data);
+        });
+        stream.on('error', err => {
+          closeSftp(sftp);
+          reject(err);
+        });
       });
     });
   } catch (err) {
-    if (conn) conn.end();
+    if (conn?.__poolKey && isChannelOpenFailure(err) && attempt < 3) {
+      console.warn(`[SFTP] Channel open failed for ${conn.__poolKey}; evicting pooled connection and retrying read (${attempt}/2).`);
+      evictPooledConnection(conn.__poolKey);
+      await wait(150 * attempt);
+      return readFileFromContainer(userId, remotePath, attempt + 1);
+    }
     throw err;
   }
 }

@@ -7,7 +7,7 @@ import Course from '../models/Course.js';
 import LabAssignment from '../models/LabAssignment.js';
 import { protect, authorize } from '../middleware/auth.js';
 import { requireAuth } from '../middleware/auth.js';
-import { ensureSessionContainer } from '../controllers/sshController.js';
+import { ensureSessionContainer, stopSessionContainer } from '../controllers/sshController.js';
 import EvaluationRun from '../models/EvaluationRun.js';
 import TestAttempt from '../models/TestAttempt.js';
 
@@ -20,13 +20,39 @@ function getAttemptTotalSeconds(attempt) {
   return Math.max(1, baseSeconds + (Number(attempt.extraMinutes || 0) * 60));
 }
 
+async function expireEndedAssignments(now = new Date()) {
+  await LabAssignment.updateMany(
+    {
+      status: 'active',
+      endsAt: { $lte: now },
+    },
+    {
+      $set: {
+        status: 'ended',
+        endedAt: now,
+      },
+    }
+  );
+}
+
 async function getStudentVisibleAssignments(student, now = new Date()) {
+  await expireEndedAssignments(now);
   const assignments = await LabAssignment.find({
     status: 'active',
     activeModule: { $ne: null },
-    $or: [
-      { targetBatch: { $in: [null, ''] } },
-      { targetBatch: student.batch || '' },
+    $and: [
+      {
+        $or: [
+          { endsAt: null },
+          { endsAt: { $gt: now } },
+        ],
+      },
+      {
+        $or: [
+          { targetBatch: { $in: [null, ''] } },
+          { targetBatch: student.batch || '' },
+        ],
+      },
     ],
   }).populate({
     path: 'activeModule',
@@ -95,6 +121,23 @@ router.post('/init', requireAuth, async (req, res) => {
   }
 });
 
+router.post('/close', requireAuth, async (req, res) => {
+  try {
+    if (req.user.role !== 'student') {
+      return res.status(403).json({ error: 'Only students can close their lab session' });
+    }
+
+    const { sessionId } = req.body || {};
+    if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
+
+    const result = await stopSessionContainer(req.user.user_id, sessionId);
+    res.json(result);
+  } catch (err) {
+    console.error('[sessions] close session error:', err);
+    res.status(500).json({ error: err.message || 'Failed to close lab session' });
+  }
+});
+
 router.get('/student-dashboard', requireAuth, async (req, res) => {
   try {
     if (req.user.role !== 'student') {
@@ -156,6 +199,7 @@ router.get('/student-dashboard', requireAuth, async (req, res) => {
 
 router.post('/test-attempts/start', requireAuth, async (req, res) => {
   try {
+    await expireEndedAssignments();
     const { moduleId, sessionId, slotKey } = req.body;
     const userId = req.user.user_id;
     if (!moduleId) {
@@ -481,7 +525,7 @@ router.get('/:sessionId/current-module', requireAuth, async (req, res) => {
 
 // Check if the globally-assigned module has changed (or expired out of the
 // current slot) since the client last loaded it.
-router.get('/:sessionId/check-module-update', async (req, res) => {
+router.get('/:sessionId/check-module-update', requireAuth, async (req, res) => {
   try {
     const { currentModuleId } = req.query;
 
@@ -489,13 +533,11 @@ router.get('/:sessionId/check-module-update', async (req, res) => {
       return res.status(400).json({ error: 'Current module ID is required' });
     }
 
-    const assignment = await LabAssignment.findOne({ key: 'global' });
-    const isActive = !!assignment &&
-      assignment.status === 'active' &&
-      (!assignment.endsAt || new Date(assignment.endsAt) > new Date());
-    const activeModuleId = isActive && assignment.activeModule
-      ? assignment.activeModule.toString()
-      : null;
+    const student = await User.findOne({ user_id: req.user.user_id, role: 'student' }).lean();
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const assignment = (await getStudentVisibleAssignments(student))[0];
+    const activeModuleId = assignment?.activeModule?._id?.toString() || null;
     const hasUpdate = activeModuleId !== currentModuleId;
 
     res.status(200).json({

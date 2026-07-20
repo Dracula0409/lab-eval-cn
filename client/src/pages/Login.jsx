@@ -37,8 +37,6 @@ export default function Login() {
       });
       const student = loginRes.data.student;
 
-      await axios.post(`${API_BASE}/api/sessions/init`, {});
-
       navigate('/student-dashboard');
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to login. Is the server running?');

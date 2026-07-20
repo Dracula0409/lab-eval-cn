@@ -25,6 +25,7 @@ const TerminalComponent = ({
   const timeoutRef = useRef(null);
   const lastSentDataRef = useRef('');
   const sessionEnded = useRef(false);
+  const isClosedManuallyRef = useRef(false);
 
   const wsURL = `${WS_BASE}/ws/ssh?terminalId=${encodeURIComponent(terminalId)}&sessionId=${encodeURIComponent(sessionId)}`;
 
@@ -73,7 +74,12 @@ const TerminalComponent = ({
 
   // WebSocket connection effect - independent of visibility
   useEffect(() => {
-    let isClosedManually = false;
+    // Don't attempt to connect until we have a valid sessionId. If the
+    // component mounts before the session is initialized, wait for the
+    // prop to change and the effect will re-run.
+    if (!sessionId) {
+      return undefined;
+    }
     let retryCount = 0;
     const maxRetries = 5;
 
@@ -140,7 +146,7 @@ const TerminalComponent = ({
       };
 
       ws.onclose = () => {
-        if (!isClosedManually && retryCount < maxRetries && !sessionEnded.current) {
+        if (!isClosedManuallyRef.current && retryCount < maxRetries && !sessionEnded.current) {
           const delay = Math.min(1000 * 2 ** retryCount, 10000);
           console.warn(`[WS] Disconnected from ${terminalId}, retrying in ${delay}ms`);
           if (xterm.current) {
@@ -161,10 +167,28 @@ const TerminalComponent = ({
 
     connectWebSocket();
 
+    const onCloseSession = () => {
+      try {
+        isClosedManuallyRef.current = true;
+        sessionEnded.current = true;
+        if (wsRef.current) {
+          try { wsRef.current.close(); } catch (_) {}
+        }
+        if (xterm.current) {
+          xterm.current.writeln('\r\n*** Session closed by user ***');
+          xterm.current.blur();
+        }
+      } catch (err) {
+        console.error('Failed to close session cleanly:', err);
+      }
+    };
+
+    window.addEventListener('close-session', onCloseSession);
+
     return () => {
-      isClosedManually = true;
+      isClosedManuallyRef.current = true;
+      try { window.removeEventListener('close-session', onCloseSession); } catch (_) {}
       wsRef.current?.close();
-      xterm.current?.dispose();
     };
   }, [terminalId, wsURL, onSessionEnd]);
 

@@ -19,9 +19,9 @@ function getSessionAvailabilityEnd(sessionSlot, baseDate = new Date(), rollForwa
   const now = new Date();
   const end = new Date(baseDate);
   if (sessionSlot === 'FN') {
-    end.setHours(12, 30, 0, 0);
+    end.setHours(13, 0, 0, 0);
   } else if (sessionSlot === 'AN') {
-    end.setHours(17, 0, 0, 0);
+    end.setHours(17, 30, 0, 0);
   } else {
     return new Date(now.getTime() + 12 * 60 * 60 * 1000);
   }
@@ -30,6 +30,21 @@ function getSessionAvailabilityEnd(sessionSlot, baseDate = new Date(), rollForwa
     end.setDate(end.getDate() + 1);
   }
   return end;
+}
+
+async function expireEndedAssignments(now = new Date()) {
+  await LabAssignment.updateMany(
+    {
+      status: 'active',
+      endsAt: { $lte: now },
+    },
+    {
+      $set: {
+        status: 'ended',
+        endedAt: now,
+      },
+    }
+  );
 }
 
 // Create a module - with auth
@@ -110,7 +125,12 @@ router.get('/', protect, async (req, res) => {
 
 router.get('/active-assignments', requireAuth, authorize('faculty', 'admin'), async (req, res) => {
   try {
-    const assignments = await LabAssignment.find({ status: 'active', activeModule: { $ne: null } })
+    await expireEndedAssignments();
+    const assignments = await LabAssignment.find({
+      status: 'active',
+      activeModule: { $ne: null },
+      $or: [{ endsAt: null }, { endsAt: { $gt: new Date() } }],
+    })
       .populate('activeModule', 'name date durationMinutes targetBatch sessionSlot maxMarks')
       .sort({ assignedAt: -1 })
       .lean();
@@ -271,6 +291,7 @@ router.patch('/:id/quick-update', requireAuth, authorize('faculty', 'admin'), as
 // replace the whole assign-to-test-session route with:
 router.post('/:moduleId/assign-to-test-session', requireAuth, authorize('faculty', 'admin'), async (req, res) => {
   try {
+    await expireEndedAssignments();
     const { moduleId } = req.params;
 
     if (!mongoose.Types.ObjectId.isValid(moduleId)) {

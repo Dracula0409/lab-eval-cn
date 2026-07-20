@@ -20,6 +20,7 @@ export default function QuestionPane({
   setActiveTab: setControlledTab,
   evalMessage,
   submissionRefreshTrigger = 0,
+  sessionId = '',
 }) {
   if (!questions || !Array.isArray(questions) || questions.length === 0) {
     return (
@@ -139,6 +140,7 @@ export default function QuestionPane({
           <div>
             <Submissions
               questionId={question.id}
+              sessionId={sessionId}
               refreshTrigger={submissionRefreshTrigger}
             />
           </div>

@@ -26,6 +26,10 @@ async function handleEvaluation(req, res, runType) {
       return res.status(400).json({ error: 'tagPaths is required (tag -> absolute file path)' });
     }
 
+    if (!req.user || req.user.role !== 'student') {
+      return res.status(403).json({ error: 'Only students can run evaluations' });
+    }
+
     console.log("2. before runAndEvaluate");
 
     const wantsStream = req.query.stream === '1';
@@ -40,10 +44,6 @@ async function handleEvaluation(req, res, runType) {
     const sendLog = wantsStream
       ? (event) => res.write(`${JSON.stringify({ event: 'log', ...event })}\n`)
       : undefined;
-
-    if (!req.user || req.user.role !== 'student') {
-      return res.status(403).json({ error: 'Only students can run evaluations' });
-    }
 
     const result = await runAndEvaluate({
       userId: req.user.user_id,

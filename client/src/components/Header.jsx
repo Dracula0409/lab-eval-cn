@@ -25,7 +25,8 @@ export default function Header({
   backText,
   moduleInfo,
   loadingQuestions,
-  onLogout
+  onLogout,
+  onExitLab
 }) {
   return (
     <header className="bg-white/80 backdrop-blur-lg border-b border-gray-200/50 shadow-lg">
@@ -139,6 +140,15 @@ export default function Header({
               </div>
               <Timer duration={timeLimit} totalDuration={totalTimeLimit} onExpire={onTimeUp} />
             </div>
+          )}
+          {!isTeacherPage && onExitLab && (
+            <button
+              onClick={onExitLab}
+              className="flex items-center space-x-2 px-4 py-2 text-sm font-medium text-red-600 hover:text-white bg-red-50 hover:bg-red-600 backdrop-blur-sm rounded-xl border border-red-200/50 shadow-sm hover:shadow-md transition-all duration-300"
+            >
+              <ArrowRightOnRectangleIcon className="w-4 h-4" />
+              <span className="hidden lg:inline">Exit Lab</span>
+            </button>
           )}
         </div>
       </div>

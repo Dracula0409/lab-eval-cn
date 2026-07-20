@@ -7,6 +7,7 @@ import path from 'path';
 import apiRoutes from './routes/index.js';
 import { initSSHWebSocket } from './controllers/sshController.js';
 import { connectDB, disconnectDB } from './utils/db.js'; 
+import { startSSHPoolReaper } from './utils/sshConnectionPool.js';
 
 dotenv.config();
 
@@ -71,4 +72,5 @@ const PORT = process.env.PORT || 5001;
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running at http://0.0.0.0:${PORT}`);
+  startSSHPoolReaper();
 });

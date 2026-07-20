@@ -480,7 +480,7 @@ function COMPILE_RUN()
                 exit 105
         fi
 
-        if [[ "$1" == *.c ]];then
+		if [[ "$1" == *.c ]];then
 
         	gcc "$1" -o "$2"
         	
@@ -489,7 +489,7 @@ function COMPILE_RUN()
 			javac "$1"
 		
 		fi
-		
+
         if [[ $? == 1 ]];then
                 echo -e "\033[31mCOMPILATION ERROR IN $1 \033[0m"
                 CLEAR_ALL
@@ -515,10 +515,9 @@ function COMPILE_RUN()
 
 	
 	### Now running the file
-
 		if [[ "$1" == *.c ]];then
 
-			echo "RUNNING JAVA FILE [ ${1} ]"
+			echo "RUNNING C FILE [ ${1} ]"
 	        coproc "coproc_${PROGRAMS_RAN_COUNT}" { ./$2 > out_${PROGRAMS_RAN_COUNT}; }
 			
 		elif [[ "$1" == *.java ]];then
@@ -529,7 +528,6 @@ function COMPILE_RUN()
 	        coproc "coproc_${PROGRAMS_RAN_COUNT}" { java "${file_name_java}" > out_${PROGRAMS_RAN_COUNT}; }
 		
 		fi
-
 		#echo "[ EXIT CODE OF COPROC_${PROGRAMS_RAN_COUNT} : $? ]"
 
 

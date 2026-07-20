@@ -187,6 +187,16 @@ const TimeLockedExit = ({ show, onExit }) => {
   );
 };
 
+const WorkspaceLoading = ({ message = 'Preparing your lab workspace...' }) => (
+  <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+    <div className="w-full max-w-sm rounded-lg border border-gray-200 bg-white shadow-sm p-6 text-center">
+      <div className="mx-auto mb-4 h-9 w-9 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-600" />
+      <h1 className="text-base font-semibold text-gray-900">CN Lab</h1>
+      <p className="mt-2 text-sm text-gray-600">{message}</p>
+    </div>
+  </div>
+);
+
 
 // Helper functions
 const getCurrentUser = () => window.__authUser?.user_id || '';
@@ -204,6 +214,7 @@ export default function CNLabWorkspace() {
   const [searchParams] = useSearchParams();
   const forceFreeCoding = searchParams.get('free') === '1';
   const requestedModuleId = searchParams.get('moduleId') || '';
+  const requestedSessionId = searchParams.get('sessionId') || '';
   const isMobile = useIsMobile();
   const [authReady, setAuthReady] = useState(false);
   const [activeTab, setActiveTab] = useState('question');
@@ -242,12 +253,14 @@ export default function CNLabWorkspace() {
     error: '',
   });
   const [timeLocked, setTimeLocked] = useState(false);
+  const [closingSession, setClosingSession] = useState(false);
   const panelRef = useRef(null);
   const logBoxRef = useRef(null);
   const dirtyFileIdsRef = useRef(new Set());
   const fileHydrationRequestRef = useRef(0);
   const lastLoadedModuleIdRef = useRef(null);
   const autoSubmitStartedRef = useRef(false);
+  const closeSentRef = useRef(false);
   // const [isSubmitted, setIsSubmitted] = useState(false);
 
   useEffect(() => {
@@ -259,17 +272,34 @@ export default function CNLabWorkspace() {
           return;
         }
         window.__authUser = meRes.data.user;
-        const sessionRes = await axios.post(`${API_BASE}/api/sessions/init`, {
-          mode: forceFreeCoding ? 'free' : 'lab',
-        });
-        window.__labSessionId = sessionRes.data.sessionId;
+        if (requestedSessionId) {
+          window.__labSessionId = requestedSessionId;
+        } else {
+          // Ensure /api/sessions/init is only called once even if this
+          // component mounts multiple times or other parts of the app
+          // try to initialize concurrently. Use a global promise slot.
+          if (!window.__labSessionInitPromise) {
+            window.__labSessionInitPromise = axios.post(`${API_BASE}/api/sessions/init`, {
+              mode: forceFreeCoding ? 'free' : 'lab',
+            }).then((res) => {
+              window.__labSessionId = res.data.sessionId;
+              return res;
+            }).catch((err) => {
+              // Reset promise on failure so callers can retry
+              window.__labSessionInitPromise = null;
+              throw err;
+            });
+          }
+
+          await window.__labSessionInitPromise;
+        }
         setAuthReady(true);
       } catch {
         navigate('/login');
       }
     }
     loadAuth();
-  }, [navigate, forceFreeCoding]);
+  }, [navigate, forceFreeCoding, requestedSessionId]);
 
   useEffect(() => {
     console.log(currentWorkingDir);
@@ -485,6 +515,25 @@ export default function CNLabWorkspace() {
 
   return getTagsFromQuestion(questions[activeQuestionIdx]);
 }, [questions, activeQuestionIdx]);
+
+  const getTagAssignmentError = (currentTags = tags, currentMap = tagToFileMap, currentFiles = files) => {
+    if (!currentTags.length) {
+      return 'This question has no tags configured. Please ask the teacher to set file tags before submitting.';
+    }
+
+    const missingTags = currentTags.filter((tag) => !currentMap[tag]);
+    if (missingTags.length) {
+      return `Please specify files for: ${missingTags.join(', ')}.`;
+    }
+
+    const openPaths = new Set(currentFiles.map((file) => file.path));
+    const staleTags = currentTags.filter((tag) => !openPaths.has(currentMap[tag]));
+    if (staleTags.length) {
+      return `The selected file for ${staleTags.join(', ')} is no longer open. Please specify tags again.`;
+    }
+
+    return '';
+  };
 
 
   useEffect(() => {
@@ -936,6 +985,14 @@ export default function CNLabWorkspace() {
           : f
       )
     );
+    setTagToFileMap((prev) => {
+      const next = { ...prev };
+      if (file.tag) next[file.tag] = newPath;
+      for (const [tag, mappedPath] of Object.entries(next)) {
+        if (mappedPath === oldPath) next[tag] = newPath;
+      }
+      return next;
+    });
 
     setLanguage(detectedLanguage);
 
@@ -983,6 +1040,14 @@ export default function CNLabWorkspace() {
           : f
       )
     );
+    setTagToFileMap((prev) => {
+      const next = { ...prev };
+      if (file.tag) next[file.tag] = newPath;
+      for (const [tag, mappedPath] of Object.entries(next)) {
+        if (mappedPath === oldPath) next[tag] = newPath;
+      }
+      return next;
+    });
 
     // Notify backend to rename file inside container
     try {
@@ -1009,8 +1074,9 @@ export default function CNLabWorkspace() {
     const currentQuestion = questions[activeQuestionIdx];
     if (!currentQuestion) return;
 
-    if (Object.keys(tagToFileMap).length !== tags.length) {
-      alert('Please assign a file for every tag before running evaluation.');
+    const tagError = getTagAssignmentError();
+    if (tagError) {
+      alert(tagError);
       return;
     }
 
@@ -1083,6 +1149,64 @@ export default function CNLabWorkspace() {
     window.dispatchEvent(new CustomEvent('stop-all-processes'));
   };
 
+  const handleExitWorkspace = async ({ confirmExit = true } = {}) => {
+    if (closingSession) return;
+    if (confirmExit && !window.confirm('Exit this lab now? Your current container will be stopped.')) {
+      return;
+    }
+
+    try {
+      setClosingSession(true);
+      // Instruct terminals to stop and avoid reconnecting
+      window.dispatchEvent(new CustomEvent('close-session'));
+      window.dispatchEvent(new CustomEvent('stop-all-processes'));
+      const sessionId = getCurrentLabSession();
+      if (sessionId) {
+        closeSentRef.current = true;
+        const closeRes = await axios.post(`${API_BASE}/api/sessions/close`, { sessionId });
+        console.log('Closed lab session:', closeRes.data);
+        if (closeRes.data?.stopped === false) {
+          alert(`Lab container was not stopped: ${closeRes.data.reason || 'unknown reason'}`);
+        }
+      }
+      navigate('/student-dashboard');
+    } catch (err) {
+      console.error('Failed to close lab session:', err);
+      alert(err.response?.data?.error || 'Failed to stop the lab container. Please try Exit Lab again.');
+      setClosingSession(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!authReady) return undefined;
+
+    const closeOnLeave = () => {
+      const sessionId = getCurrentLabSession();
+      if (!sessionId || closeSentRef.current) return;
+      closeSentRef.current = true;
+      // Ensure terminal clients don't reconnect while we're closing server-side
+      try { window.dispatchEvent(new CustomEvent('close-session')); } catch (_) {}
+      window.dispatchEvent(new CustomEvent('stop-all-processes'));
+
+      const body = JSON.stringify({ sessionId });
+      fetch(`${API_BASE}/api/sessions/close`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        credentials: 'include',
+        keepalive: true,
+      }).catch(() => {});
+    };
+
+    window.addEventListener('pagehide', closeOnLeave);
+    window.addEventListener('beforeunload', closeOnLeave);
+
+    return () => {
+      window.removeEventListener('pagehide', closeOnLeave);
+      window.removeEventListener('beforeunload', closeOnLeave);
+    };
+  }, [authReady]);
+
 
   const handleSubmit = async () => {
     if (timeLocked) return null;
@@ -1092,9 +1216,15 @@ export default function CNLabWorkspace() {
   const submitQuestion = async (question, { autoSubmitted = false, useActiveFiles = false } = {}) => {
     if (!question || question.id === 'free_coding') return null;
 
-    if (Object.keys(tagToFileMap).length !== tags.length) {
+    const expectedTags = useActiveFiles ? tags : getTagsFromQuestion(question);
+    const tagError = useActiveFiles
+      ? getTagAssignmentError(expectedTags, tagToFileMap, files)
+      : expectedTags.length
+        ? ''
+        : 'This question has no tags configured. Please ask the teacher to set file tags before submitting.';
+    if (tagError) {
       if (autoSubmitted) return null;
-      alert('Please assign a file for every tag before submitting.');
+      alert(tagError);
       return;
     }
 
@@ -1305,6 +1435,14 @@ export default function CNLabWorkspace() {
     }
   }, []);
 
+  if (!authReady || loadingQuestions || !moduleInfo || !questions.length || closingSession) {
+    return (
+      <WorkspaceLoading
+        message={closingSession ? 'Closing your lab container...' : 'Preparing your lab workspace...'}
+      />
+    );
+  }
+
   // Mobile layout
 
   // Mobile layout
@@ -1318,18 +1456,19 @@ export default function CNLabWorkspace() {
         />
         <TimeUpDialog
           state={timeUpDialog}
-          onExit={() => navigate('/student-dashboard')}
+          onExit={() => handleExitWorkspace({ confirmExit: false })}
           onReview={() => setTimeUpDialog((prev) => ({ ...prev, open: false }))}
         />
         <TimeLockedExit
           show={timeLocked && !timeUpDialog.open}
-          onExit={() => navigate('/student-dashboard')}
+          onExit={() => handleExitWorkspace({ confirmExit: false })}
         />
         <Header
           title={question ? question.title : 'No questions available'}
           onTimeUp={handleTimeUp}
           timeLimit={isFreeCoding ? null : remainingSeconds}
           totalTimeLimit={isFreeCoding ? null : totalSeconds}
+          onExitLab={() => handleExitWorkspace()}
         />
         <MobileTabs
           activeTab={activeTab}
@@ -1351,6 +1490,7 @@ export default function CNLabWorkspace() {
               setActiveTab={setQuestionPaneTab}
               evalMessage={evalMessage}
               submissionRefreshTrigger={submissionRefreshTrigger}
+              sessionId={getCurrentLabSession()}
             />
           )}
           {activeTab === 'editor' && (
@@ -1396,12 +1536,12 @@ export default function CNLabWorkspace() {
       />
       <TimeUpDialog
         state={timeUpDialog}
-        onExit={() => navigate('/student-dashboard')}
+        onExit={() => handleExitWorkspace({ confirmExit: false })}
         onReview={() => setTimeUpDialog((prev) => ({ ...prev, open: false }))}
       />
       <TimeLockedExit
         show={timeLocked && !timeUpDialog.open}
-        onExit={() => navigate('/student-dashboard')}
+        onExit={() => handleExitWorkspace({ confirmExit: false })}
       />
       <Header
         title={moduleInfo ? moduleInfo.name : (question ? question.title : 'No questions available')}
@@ -1412,6 +1552,7 @@ export default function CNLabWorkspace() {
         onToggleQuestion={() => setShowQuestion(!showQuestion)}
         moduleInfo={moduleInfo}
         loadingQuestions={loadingQuestions}
+        onExitLab={() => handleExitWorkspace()}
       />
       
       <div className="flex-1 overflow-hidden">
@@ -1449,6 +1590,7 @@ export default function CNLabWorkspace() {
                         setActiveTab={setQuestionPaneTab}
                         evalMessage={evalMessage}
                         submissionRefreshTrigger={submissionRefreshTrigger}
+                        sessionId={getCurrentLabSession()}
                       />
                     )}
                   </Panel>

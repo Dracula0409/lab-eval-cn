@@ -59,7 +59,9 @@ RUN mkdir /var/run/sshd && \
     echo "UsePAM yes" >> /etc/ssh/sshd_config && \
     echo "AcceptEnv LANG LC_*" >> /etc/ssh/sshd_config && \
     echo "TCPKeepAlive yes" >> /etc/ssh/sshd_config && \
-    echo "PermitTTY yes" >> /etc/ssh/sshd_config
+    echo "PermitTTY yes" >> /etc/ssh/sshd_config && \
+    echo "MaxSessions 100" >> /etc/ssh/sshd_config && \
+    echo "MaxStartups 100:30:200" >> /etc/ssh/sshd_config
 
 # Generate host SSH keys
 RUN ssh-keygen -A

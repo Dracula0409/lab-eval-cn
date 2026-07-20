@@ -34,24 +34,38 @@ function SubmissionResults({ results = [], evalError = null }) {
   );
 }
 
-export default function Submissions({ questionId, refreshTrigger = 0 }) {
+export default function Submissions({ questionId, sessionId = '', refreshTrigger = 0 }) {
   const [submissions, setSubmissions] = useState([]);
   const [selectedSubmission, setSelectedSubmission] = useState(null);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     const fetchSubmissions = async () => {
+      if (!questionId) return;
+
       try {
         const query = new URLSearchParams({ questionId });
-        const res = await fetch(`${API_BASE}/api/submission/fetch?${query}`);
+        if (sessionId) query.set('sessionId', sessionId);
+
+        const res = await fetch(`${API_BASE}/api/submission/fetch?${query}`, {
+          credentials: 'include',
+        });
         const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data?.error || `Failed to load submissions (${res.status})`);
+        }
+
         setSubmissions(Array.isArray(data) ? data : []);
+        setError('');
       } catch (err) {
         console.error('[Frontend] Failed to load submissions:', err);
+        setError(err.message || 'Failed to load submissions.');
+        setSubmissions([]);
       }
     };
 
     fetchSubmissions();
-  }, [questionId, refreshTrigger]);
+  }, [questionId, sessionId, refreshTrigger]);
 
   if (selectedSubmission) {
     return (
@@ -107,7 +121,9 @@ export default function Submissions({ questionId, refreshTrigger = 0 }) {
     <div className="p-6 space-y-4 fade-in-up">
       <h3 className="text-lg font-semibold text-gray-800">Submission History</h3>
 
-      {submissions.length === 0 ? (
+      {error ? (
+        <div className="text-sm text-red-600">{error}</div>
+      ) : submissions.length === 0 ? (
         <div className="text-sm text-gray-500 italic">No submissions yet.</div>
       ) : (
         <ul className="divide-y divide-gray-200 rounded-md border border-gray-100 bg-white shadow-sm">
