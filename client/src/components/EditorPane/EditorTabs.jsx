@@ -27,7 +27,6 @@ export default function EditorTabs({
   const getFileIcon = (filename) => {
     const ext = filename.split('.').pop()?.toLowerCase();
     switch (ext) {
-      case 'py': return <CodeBracketIcon className="w-4 h-4 text-green-600" />;
       case 'js': return <CodeBracketIcon className="w-4 h-4 text-yellow-500" />;
       case 'java': return <BoltIcon className="w-4 h-4 text-orange-600" />;
       case 'cpp':

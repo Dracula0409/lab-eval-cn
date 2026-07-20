@@ -1,173 +1,180 @@
 import { useState } from 'react';
-import { 
-  PlayIcon,
-  InformationCircleIcon
-} from '@heroicons/react/24/outline';
+import { PlayIcon, CheckCircleIcon, XCircleIcon } from '@heroicons/react/24/outline';
+import { parseJsonTestcase, formatTestcaseName } from '../utils/testcaseHelper';
 
-export default function TestCases({ testCases = [], testCaseResults = [] }) {
-  const [expandedTests, setExpandedTests] = useState(new Set([0])); // first test expanded by default
-
-  console.log('TestCases props:', { 
-    testCases, 
-    testCaseResults,
-    testCasesLength: testCases.length,
-    testCaseResultsLength: testCaseResults.length 
-  });
+export default function TestCases({
+  testCases = [],
+  testCaseResults = [],
+  evalMessage = null,
+  connResults = [],
+  isEvaluating = false,
+}) {
+  const [expandedTests, setExpandedTests] = useState(new Set([0]));
 
   const toggleExpanded = (index) => {
     const newExpanded = new Set(expandedTests);
-    if (newExpanded.has(index)) {
-      newExpanded.delete(index);
-    } else {
-      newExpanded.add(index);
-    }
+    if (newExpanded.has(index)) newExpanded.delete(index);
+    else newExpanded.add(index);
     setExpandedTests(newExpanded);
   };
 
-  const formatTestInput = (input) => {
-    if (Array.isArray(input)) {
-      return input.map((item, i) => `Input ${i + 1}: ${item}`).join('\n');
-    }
-    return String(input);
-  };
+  const hasResults = testCaseResults.length > 0;
+  const passedCount = testCaseResults.filter((r) => r.passed).length;
+  const totalResults = testCaseResults.length;
 
-  const formatTestOutput = (output) => {
-    if (Array.isArray(output)) {
-      return output.map((item, i) => `Output ${i + 1}: ${item}`).join('\n');
-    }
-    return String(output);
-  };
+  const buildFromSpec = (name, spec) => ({
+    name,
+    spec,
+    friendlySteps: parseJsonTestcase(spec),
+  });
 
-  // Prefer dynamic testCaseResults if present
-  const displayCases = (testCaseResults && testCaseResults.length > 0) ? testCaseResults : testCases;
+  const specList = Array.isArray(testCases)
+    ? testCases.map((tc) => buildFromSpec(tc.name || tc.id, tc.spec || tc))
+    : Object.entries((testCases && (testCases.q1 || testCases)) || {}).map(([name, spec]) =>
+        buildFromSpec(name, spec)
+      );
 
-  if (!displayCases.length) {
+  const mergedCases = hasResults
+    ? testCaseResults.map((result) => {
+        const specEntry = specList.find(
+          (tc) => tc.name === result.name || tc.name === result.fullName
+        );
+        return {
+          ...result,
+          spec: specEntry?.spec,
+          friendlySteps: specEntry?.friendlySteps?.length
+            ? specEntry.friendlySteps
+            : parseJsonTestcase(specEntry?.spec),
+        };
+      })
+    : specList;
+
+  if (!mergedCases.length && !isEvaluating) {
     return (
       <div className="p-6 text-center text-gray-500">
         <PlayIcon className="w-12 h-12 mx-auto mb-3 text-gray-300" />
-        <p>No test cases available</p>
+        <p>{evalMessage || 'No test cases defined for this question.'}</p>
       </div>
     );
   }
 
   return (
     <div className="p-4 space-y-4">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold text-gray-900">Test Cases</h3>
-        <span className="text-sm text-gray-500">
-          {displayCases.length} test{displayCases.length !== 1 ? 's' : ''}
-        </span>
-      </div>
+      {isEvaluating && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 flex items-center gap-2 text-blue-800 text-sm">
+          <div className="animate-spin rounded-full h-4 w-4 border-2 border-blue-600 border-t-transparent" />
+          Running evaluation… check the terminal for live output.
+        </div>
+      )}
 
-      {displayCases.map((testCase, index) => {
-        const isExpanded = expandedTests.has(index);
-        return (
-          <div
-            key={testCase.id || index}
-            className="border border-gray-200 rounded-lg overflow-hidden bg-white shadow-sm"
-          >
-            {/* Test case header */}
-            <div
-              className="flex items-center justify-between p-4 bg-gray-50 cursor-pointer hover:bg-gray-100 transition-colors"
-              onClick={() => toggleExpanded(index)}
-            >
-              <div className="flex items-center space-x-3">
-                <span className="font-medium text-gray-900">
-                  Test Case {index + 1}
+      {hasResults && (
+        <div
+          className={`rounded-lg border p-4 ${
+            passedCount === totalResults && totalResults > 0
+              ? 'bg-green-50 border-green-200'
+              : 'bg-amber-50 border-amber-200'
+          }`}
+        >
+          <div className="flex items-center gap-2 font-semibold text-gray-900">
+            {passedCount === totalResults && totalResults > 0 ? (
+              <CheckCircleIcon className="w-5 h-5 text-green-600" />
+            ) : (
+              <XCircleIcon className="w-5 h-5 text-amber-600" />
+            )}
+            <span>
+              {passedCount} / {totalResults} test cases passed
+            </span>
+          </div>
+          <p className="text-xs text-gray-600 mt-1">
+            Evaluate results are shown here only and are not saved.
+          </p>
+        </div>
+      )}
+
+      {connResults.length > 0 && (
+        <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-4">
+          <h4 className="text-sm font-semibold text-indigo-900 mb-2">Connection Checks</h4>
+          <div className="space-y-1">
+            {connResults.map((c, i) => (
+              <div key={i} className="flex items-center justify-between text-sm">
+                <span className="font-mono text-gray-700">
+                  {c.entity}
+                  {c.peer ? ` → ${c.peer}` : ''} ({c.state})
+                </span>
+                <span
+                  className={`px-2 py-0.5 rounded text-xs font-bold ${
+                    c.passed ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                  }`}
+                >
+                  {c.verdict}
                 </span>
               </div>
-              <div className="flex items-center space-x-3">
-                {typeof testCase.points === 'number' && (
-                  <span className="text-sm font-medium text-blue-800 bg-blue-100 px-2 py-1 rounded">
-                    {testCase.points} pts
-                  </span>
-                )}
-              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {evalMessage && !hasResults && !isEvaluating && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {evalMessage}
+        </div>
+      )}
+
+      {mergedCases.map((testCase, index) => {
+        const isExpanded = expandedTests.has(index);
+        const label = formatTestcaseName(testCase.name || testCase.id || `testcase${index + 1}`);
+        const passed = testCase.passed;
+        const hasVerdict = typeof passed === 'boolean';
+
+        return (
+          <div
+            key={(testCase.name || '') + index}
+            className="border border-gray-200 rounded-lg overflow-hidden bg-white shadow-sm"
+          >
+            <div
+              className="flex items-center justify-between p-4 bg-gray-50 cursor-pointer hover:bg-gray-100"
+              onClick={() => toggleExpanded(index)}
+            >
+              <span className="font-medium text-gray-900">{label}</span>
+              {hasVerdict && (
+                <span
+                  className={`px-2 py-1 rounded text-xs font-bold ${
+                    passed ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                  }`}
+                >
+                  {passed ? 'Passed' : 'Failed'}
+                </span>
+              )}
             </div>
 
-            {/* Test case details */}
             {isExpanded && (
-              <div className="p-4 border-t border-gray-200 overflow-x-auto">
-                <div className="grid gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Input:
-                    </label>
-                    <pre className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm text-gray-800 overflow-x-auto">
-                      {formatTestInput(testCase.input)}
-                    </pre>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Expected Output:
-                    </label>
-                    <pre className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-gray-800 overflow-x-auto">
-                      {formatTestOutput(testCase.expectedOutput)}
-                    </pre>
-                  </div>
-
-                  {testCase.actualOutput != null && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Actual Output:
-                    </label>
-                    <pre className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-sm text-gray-800 overflow-x-auto">
-                      {formatTestOutput(testCase.actualOutput)}
-                    </pre>
-                  </div>
-                  )}
-
-                  {testCase.stderr && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Error Output:
-                    </label>
-                    <pre className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-gray-800 overflow-x-auto">
-                      {formatTestOutput(testCase.stderr)}
-                    </pre>
-                  </div>
-                  )}
-
-                  {testCase.description && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Description:
-                      </label>
-                      <p className="text-sm text-gray-600 bg-blue-50 border border-blue-200 rounded-lg p-3">
-                        {testCase.description}
-                      </p>
+              <div className="p-4 border-t space-y-3">
+                {(testCase.friendlySteps || []).length > 0 ? (
+                  (testCase.friendlySteps || []).map((step, si) => (
+                    <div key={si} className="text-sm bg-gray-50 rounded p-3 font-mono">
+                      <span className="font-semibold text-indigo-700">{step.label}:</span>{' '}
+                      <span className="text-gray-800">
+                        {typeof step.value === 'string' ? step.value : JSON.stringify(step.value)}
+                      </span>
                     </div>
-                  )}
+                  ))
+                ) : (
+                  <p className="text-sm text-gray-500 italic">No steps defined.</p>
+                )}
 
-                  {testCase.status && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Status:
-                    </label>
-                    <span className={`inline-block px-3 py-1 rounded-full text-xs font-bold ${testCase.status === 'PASS' ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'}`}>
-                      {testCase.status}
-                    </span>
-                  </div>
-                  )}
-                </div>
+                {hasVerdict && testCase.output && (
+                  <pre className="text-xs bg-yellow-50 border rounded p-3 overflow-x-auto whitespace-pre-wrap">
+                    {testCase.output}
+                  </pre>
+                )}
+                {hasVerdict && testCase.error && (
+                  <p className="text-sm text-red-600">{testCase.error}</p>
+                )}
               </div>
             )}
           </div>
         );
       })}
-
-      {/* Summary */}
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mt-6">
-        <div className="flex items-center space-x-2 mb-2">
-          <InformationCircleIcon className="w-5 h-5 text-blue-600" />
-          <span className="font-medium text-blue-900">Test Summary</span>
-        </div>
-        <div className="text-sm text-blue-800">
-          <p>Total test cases: <strong>{displayCases.length}</strong></p>
-          <p>Total points: <strong>{displayCases.reduce((sum, tc) => sum + (tc.points || 0), 0)}</strong></p>
-        </div>
-      </div>
     </div>
   );
 }

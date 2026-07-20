@@ -7,6 +7,7 @@ import path from 'path';
 import apiRoutes from './routes/index.js';
 import { initSSHWebSocket } from './controllers/sshController.js';
 import { connectDB, disconnectDB } from './utils/db.js'; 
+import { startSSHPoolReaper } from './utils/sshConnectionPool.js';
 
 dotenv.config();
 
@@ -17,7 +18,28 @@ const app = express();
 const server = http.createServer(app);
 
 // Middlewares
-app.use(cors());
+const allowedOrigins = [
+  "http://localhost:5173", 
+  "http://10.16.16.104:5173",
+  //"http://10.7.103.226:5173",
+  //"http://10.5.12.254:5173",
+  //"http://192.168.1.200:5173",
+  //"http://10.21.68.19:5173"     //library
+];
+
+app.use(cors({
+  origin : (origin, callback) => {
+    const isLocalDev = /^http:\/\/(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+):\d+$/.test(origin || '');
+    if(!origin || allowedOrigins.includes(origin) || isLocalDev){
+      callback(null, true);
+    }
+    else{
+      callback(new Error("Not Allowed by CORS."));
+    }
+  },
+  credentials: true, 
+}));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -48,6 +70,7 @@ process.on('SIGTERM', async () => {
 
 const PORT = process.env.PORT || 5001;
 
-server.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server running at http://0.0.0.0:${PORT}`);
+  startSSHPoolReaper();
 });

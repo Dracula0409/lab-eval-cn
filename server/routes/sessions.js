@@ -4,12 +4,354 @@ import Session from '../models/Session.js';
 import { CNModule } from '../models/Module.js';
 import User from '../models/User.js';
 import Course from '../models/Course.js';
+import LabAssignment from '../models/LabAssignment.js';
 import { protect, authorize } from '../middleware/auth.js';
+import { requireAuth } from '../middleware/auth.js';
+import { ensureSessionContainer, stopSessionContainer } from '../controllers/sshController.js';
+import EvaluationRun from '../models/EvaluationRun.js';
+import TestAttempt from '../models/TestAttempt.js';
 
 const router = express.Router();
 
+function getAttemptTotalSeconds(attempt) {
+  const baseSeconds = attempt.baseEndsAt && attempt.startedAt
+    ? Math.floor((attempt.baseEndsAt.getTime() - attempt.startedAt.getTime()) / 1000)
+    : 1;
+  return Math.max(1, baseSeconds + (Number(attempt.extraMinutes || 0) * 60));
+}
+
+async function expireEndedAssignments(now = new Date()) {
+  await LabAssignment.updateMany(
+    {
+      status: 'active',
+      endsAt: { $lte: now },
+    },
+    {
+      $set: {
+        status: 'ended',
+        endedAt: now,
+      },
+    }
+  );
+}
+
+async function getStudentVisibleAssignments(student, now = new Date()) {
+  await expireEndedAssignments(now);
+  const assignments = await LabAssignment.find({
+    status: 'active',
+    activeModule: { $ne: null },
+    $and: [
+      {
+        $or: [
+          { endsAt: null },
+          { endsAt: { $gt: now } },
+        ],
+      },
+      {
+        $or: [
+          { targetBatch: { $in: [null, ''] } },
+          { targetBatch: student.batch || '' },
+        ],
+      },
+    ],
+  }).populate({
+    path: 'activeModule',
+    populate: { path: 'questions', model: 'Question' },
+  }).sort({ assignedAt: -1 }).lean();
+
+  const visible = [];
+  for (const assignment of assignments) {
+    const moduleId = assignment.activeModule?._id?.toString();
+    if (!moduleId) continue;
+
+    const existingAttempt = await TestAttempt.findOne({
+      userId: student.user_id,
+      moduleId,
+      slotKey: assignment.slotKey,
+    }).lean();
+
+    const assignmentStillAvailable = !assignment.endsAt || new Date(assignment.endsAt) > now;
+    const attemptHasTime =
+      existingAttempt?.status === 'active' &&
+      existingAttempt.endsAt &&
+      new Date(existingAttempt.endsAt) > now;
+    const attemptExpired = !!existingAttempt && !attemptHasTime;
+
+    if (!attemptExpired && (assignmentStillAvailable || attemptHasTime)) {
+      visible.push(assignment);
+    }
+  }
+
+  return visible;
+}
+
+// Student self-service login: spin up (or reuse) the container for this
+// userId and record the studentName, no password required for now.
+router.post('/init', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.user_id;
+    const studentName = req.user.name;
+
+    if (req.user.role !== 'student') {
+      return res.status(403).json({ error: 'Only students can start lab sessions' });
+    }
+
+    const requestedSessionId = req.body?.mode === 'free'
+      ? 'FREE_CODING'
+      : req.body?.sessionId || req.body?.slotKey || null;
+    const { sessionId, containerName, sshPort } = await ensureSessionContainer(userId, requestedSessionId);
+
+    // Persist the student's display name against the session record.
+    await Session.updateOne(
+      { userId, sessionId },
+      { $set: { studentName } }
+    );
+
+    res.status(200).json({
+      success: true,
+      sessionId,
+      containerName,
+      sshPort,
+      userId,
+      studentName,
+    });
+  } catch (err) {
+    console.error('[API] /sessions/init error:', err);
+    res.status(500).json({ error: err.message || 'Failed to start lab session' });
+  }
+});
+
+router.post('/close', requireAuth, async (req, res) => {
+  try {
+    if (req.user.role !== 'student') {
+      return res.status(403).json({ error: 'Only students can close their lab session' });
+    }
+
+    const { sessionId } = req.body || {};
+    if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
+
+    const result = await stopSessionContainer(req.user.user_id, sessionId);
+    res.json(result);
+  } catch (err) {
+    console.error('[sessions] close session error:', err);
+    res.status(500).json({ error: err.message || 'Failed to close lab session' });
+  }
+});
+
+router.get('/student-dashboard', requireAuth, async (req, res) => {
+  try {
+    if (req.user.role !== 'student') {
+      return res.status(403).json({ error: 'Only students can view this dashboard' });
+    }
+    const student = await User.findOne({
+      role: 'student',
+      user_id: req.user.user_id,
+    }).select('name user_id roll_number batch mustChangePassword').lean();
+
+    if (!student) return res.status(404).json({ error: 'Student not found.' });
+
+    const now = new Date();
+    const visibleAssignments = await getStudentVisibleAssignments(student, now);
+
+    const runs = await EvaluationRun.aggregate([
+      { $match: { userId: student.user_id, runType: 'submit' } },
+      {
+        $group: {
+          _id: { moduleId: '$moduleId', sessionId: '$sessionId', slotKey: '$slotKey' },
+          lastSubmittedAt: { $max: '$createdAt' },
+          questionCount: { $addToSet: '$questionId' },
+        },
+      },
+      { $sort: { lastSubmittedAt: -1 } },
+      { $limit: 20 },
+    ]);
+
+    const moduleIds = runs.map((r) => r._id.moduleId).filter(Boolean);
+    const modules = await CNModule.find({ _id: { $in: moduleIds } }).select('name targetBatch sessionSlot durationMinutes').lean();
+    const moduleById = new Map(modules.map((m) => [m._id.toString(), m]));
+
+    res.json({
+      student,
+      activeSessions: visibleAssignments.map((assignment) => ({
+            assignmentId: assignment._id,
+            module: assignment.activeModule,
+            slotKey: assignment.slotKey,
+            assignedAt: assignment.assignedAt,
+            endsAt: assignment.endsAt,
+            targetBatch: assignment.targetBatch,
+            sessionSlot: assignment.sessionSlot,
+            durationMinutes: assignment.durationMinutes,
+          })),
+      previousTests: runs.map((r) => ({
+        moduleId: r._id.moduleId,
+        moduleName: moduleById.get(r._id.moduleId)?.name || 'CN Lab',
+        sessionId: r._id.sessionId,
+        slotKey: r._id.slotKey,
+        questionCount: r.questionCount.length,
+        lastSubmittedAt: r.lastSubmittedAt,
+      })),
+    });
+  } catch (err) {
+    console.error('[sessions] student-dashboard error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/test-attempts/start', requireAuth, async (req, res) => {
+  try {
+    await expireEndedAssignments();
+    const { moduleId, sessionId, slotKey } = req.body;
+    const userId = req.user.user_id;
+    if (!moduleId) {
+      return res.status(400).json({ error: 'moduleId is required.' });
+    }
+
+    const student = await User.findOne({ user_id: userId, role: 'student' }).lean();
+    if (!student) return res.status(404).json({ error: 'Student not found.' });
+
+    const assignment = await LabAssignment.findOne({
+      activeModule: moduleId,
+      status: 'active',
+      ...(slotKey ? { slotKey } : {}),
+      $or: [
+        { targetBatch: { $in: [null, ''] } },
+        { targetBatch: student.batch || '' },
+      ],
+    }).populate('activeModule').lean();
+
+    if (!assignment || !assignment.activeModule) {
+      return res.status(404).json({ error: 'No active assignment found for this module.' });
+    }
+    if (assignment.targetBatch && assignment.targetBatch !== student.batch) {
+      return res.status(403).json({ error: 'This module is not assigned to your batch.' });
+    }
+    const now = new Date();
+    const existingAttempt = await TestAttempt.findOne({
+      userId: student.user_id,
+      moduleId,
+      slotKey: assignment.slotKey,
+    });
+
+    if (existingAttempt) {
+      if (existingAttempt.endsAt <= now) {
+        if (existingAttempt.status !== 'expired') {
+          existingAttempt.status = 'expired';
+          await existingAttempt.save();
+        }
+        return res.status(410).json({
+          error: 'Your test time is over. You can re-enter only if staff adds extra time.',
+        });
+      }
+
+      if (existingAttempt.status !== 'active') {
+        existingAttempt.status = 'active';
+        await existingAttempt.save();
+      }
+
+      return res.json({
+        attempt: existingAttempt,
+        remainingSeconds: Math.max(0, Math.floor((existingAttempt.endsAt.getTime() - Date.now()) / 1000)),
+        totalSeconds: getAttemptTotalSeconds(existingAttempt),
+      });
+    }
+
+    if (assignment.endsAt && new Date(assignment.endsAt) <= now) {
+      return res.status(410).json({ error: 'This lab session is no longer available.' });
+    }
+
+    const startedAt = now;
+    const baseEndsAt = new Date(startedAt.getTime() + (assignment.durationMinutes || 60) * 60 * 1000);
+
+    const attempt = await TestAttempt.findOneAndUpdate(
+      { userId: student.user_id, moduleId, slotKey: assignment.slotKey },
+      {
+        $setOnInsert: {
+          userId: student.user_id,
+          studentName: student.name,
+          batch: student.batch || '',
+          moduleId,
+          slotKey: assignment.slotKey,
+          sessionId: sessionId || '',
+          startedAt,
+          baseEndsAt,
+          endsAt: baseEndsAt,
+          status: 'active',
+        },
+      },
+      { upsert: true, new: true }
+    );
+
+    if (attempt.endsAt <= new Date() && attempt.status === 'active') {
+      attempt.status = 'expired';
+      await attempt.save();
+      return res.status(410).json({
+        error: 'Your test time is over. You can re-enter only if staff adds extra time.',
+      });
+    }
+
+    res.json({
+      attempt,
+      remainingSeconds: Math.max(0, Math.floor((attempt.endsAt.getTime() - Date.now()) / 1000)),
+      totalSeconds: getAttemptTotalSeconds(attempt),
+    });
+  } catch (err) {
+    console.error('[sessions] start test attempt error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/test-attempts', requireAuth, authorize('faculty', 'admin'), async (req, res) => {
+  try {
+    const { moduleId, slotKey, batch } = req.query;
+    const filter = {};
+    if (moduleId) filter.moduleId = moduleId;
+    if (slotKey) filter.slotKey = slotKey;
+    if (batch) filter.batch = batch;
+
+    const attempts = await TestAttempt.find(filter).sort({ batch: 1, userId: 1 }).lean();
+    res.json(attempts);
+  } catch (err) {
+    console.error('[sessions] list test attempts error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/test-attempts/extend', requireAuth, authorize('faculty', 'admin'), async (req, res) => {
+  try {
+    const { moduleId, slotKey, batch, userIds, extraMinutes } = req.body;
+    const minutes = Number(extraMinutes);
+    if (!moduleId || !slotKey || !Number.isFinite(minutes) || minutes <= 0) {
+      return res.status(400).json({ error: 'moduleId, slotKey, and positive extraMinutes are required.' });
+    }
+
+    const filter = { moduleId, slotKey };
+    const ids = Array.isArray(userIds)
+      ? userIds.map((id) => String(id).trim()).filter(Boolean)
+      : [];
+    if (ids.length) filter.userId = { $in: ids };
+    if (!ids.length && batch) filter.batch = batch;
+
+    const attempts = await TestAttempt.find(filter);
+    const now = new Date();
+    for (const attempt of attempts) {
+      attempt.extraMinutes = (attempt.extraMinutes || 0) + minutes;
+      const extensionBase = attempt.endsAt && attempt.endsAt > now ? attempt.endsAt : now;
+      attempt.endsAt = new Date(extensionBase.getTime() + minutes * 60 * 1000);
+      if (attempt.status === 'expired' && attempt.endsAt > new Date()) {
+        attempt.status = 'active';
+      }
+      await attempt.save();
+    }
+
+    res.json({ success: true, updatedCount: attempts.length });
+  } catch (err) {
+    console.error('[sessions] extend attempts error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get all active sessions
-router.get('/active', async (req, res) => {
+router.get('/active', requireAuth, authorize('faculty', 'admin'), async (req, res) => {
   try {
     // Find sessions created within the last 24 hours
     const oneDayAgo = new Date();
@@ -142,68 +484,62 @@ router.patch('/modules/:id/quick-update', protect, async (req, res) => {
   }
 });
 
-// Get the currently assigned module for a session
-router.get('/:sessionId/current-module', async (req, res) => {
+// Get the currently assigned module (global, slot-aware — see labSlot.js).
+// :sessionId is accepted for URL/back-compat but no longer used to look up
+// the assignment, since it's now a single global record rather than
+// per-session.
+router.get('/:sessionId/current-module', requireAuth, async (req, res) => {
   try {
-    const { sessionId } = req.params;
-    const userId = req.query.userId;
-    
-    if (!sessionId) {
-      return res.status(400).json({ error: 'Session ID is required' });
+    const userId = req.user.user_id;
+    const { moduleId } = req.query;
+    const student = await User.findOne({ user_id: userId, role: 'student' }).lean();
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const visibleAssignments = await getStudentVisibleAssignments(student);
+    const assignment = moduleId
+      ? visibleAssignments.find((item) => item.activeModule?._id?.toString() === moduleId)
+      : visibleAssignments[0];
+    if (!assignment || !assignment.activeModule) {
+      return res.status(404).json({ error: 'No module is currently assigned' });
     }
-    
-    // Find the session for this session ID
-    const session = await Session.findOne({ 
-      sessionId,
-      ...(userId ? { userId } : {})  // Only filter by userId if provided
-    }).populate({
-      path: 'activeModule',
-      populate: {
-        path: 'questions',
-        model: 'Question'
-      }
-    });
-    
-    if (!session) {
-      return res.status(404).json({ error: 'Session not found' });
-    }
-    
-    if (!session.activeModule) {
-      return res.status(404).json({ error: 'No module is currently assigned to this session' });
-    }
-    
-    res.status(200).json(session.activeModule);
+
+    const response = typeof assignment.activeModule.toObject === 'function'
+      ? assignment.activeModule.toObject()
+      : { ...assignment.activeModule };
+    response.assignment = {
+      assignmentId: assignment._id,
+      slotKey: assignment.slotKey,
+      targetBatch: assignment.targetBatch,
+      sessionSlot: assignment.sessionSlot,
+      durationMinutes: assignment.durationMinutes,
+      assignedAt: assignment.assignedAt,
+      endsAt: assignment.endsAt,
+    };
+
+    res.status(200).json(response);
   } catch (err) {
     console.error('Error fetching current module:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Check if a module has been updated
-router.get('/:sessionId/check-module-update', async (req, res) => {
+// Check if the globally-assigned module has changed (or expired out of the
+// current slot) since the client last loaded it.
+router.get('/:sessionId/check-module-update', requireAuth, async (req, res) => {
   try {
-    const { sessionId } = req.params;
     const { currentModuleId } = req.query;
-    
-    if (!sessionId) {
-      return res.status(400).json({ error: 'Session ID is required' });
-    }
-    
+
     if (!currentModuleId) {
       return res.status(400).json({ error: 'Current module ID is required' });
     }
-    
-    // Find the session
-    const session = await Session.findOne({ sessionId });
-    
-    if (!session) {
-      return res.status(404).json({ error: 'Session not found' });
-    }
-    
-    // Check if the module has changed
-    const activeModuleId = session.activeModule ? session.activeModule.toString() : null;
+
+    const student = await User.findOne({ user_id: req.user.user_id, role: 'student' }).lean();
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const assignment = (await getStudentVisibleAssignments(student))[0];
+    const activeModuleId = assignment?.activeModule?._id?.toString() || null;
     const hasUpdate = activeModuleId !== currentModuleId;
-    
+
     res.status(200).json({
       hasUpdate,
       currentModuleId: activeModuleId

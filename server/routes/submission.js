@@ -1,5 +1,7 @@
 import { Router } from 'express';
-import Submission from '../models/Submission.js'
+import Submission from '../models/Submission.js';
+import { getActiveSessionForUser } from '../utils/sessionHelper.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -12,26 +14,45 @@ function generateSessionId() {
   return `${year}${month}${day}_${period}`;
 }
 
-router.get('/fetch', async (req, res) => {
+router.get('/fetch', requireAuth, async (req, res) => {
   try {
-    const userId = req.query.userId; // assume frontend passes this
-    const questionId = req.query.questionId; 
-    const sessionId = generateSessionId();
+    const userId = req.user.user_id;
+    const questionId = req.query.questionId;
+    let sessionId = req.query.sessionId;
 
-    const query = { userId, questionId, sessionId };
-    if (sessionId) query.sessionId = sessionId;
+    if (!userId || !questionId) {
+      return res.status(400).json({ error: 'userId and questionId are required' });
+    }
 
-    const submissions = await Submission.find(query).sort({ submittedAt: -1 });
+    if (!sessionId) {
+      try {
+        const session = await getActiveSessionForUser(userId);
+        sessionId = session.sessionId;
+      } catch (err) {
+        sessionId = generateSessionId();
+      }
+    }
 
-    const formatted = submissions.map(sub => ({
-      id: sub._id,
-      status: sub.passedCount === sub.totalTestCases ? 'Accepted' : 'Wrong Answer',
-      timestamp: new Date(sub.submittedAt).toLocaleString(),
-      sourceCode: sub.sourceCode,
-      language: sub.language,
-      passed: sub.passedCount,
-      total: sub.totalTestCases,
-    }));
+    const submissions = await Submission.find({ userId, questionId, sessionId }).sort({ createdAt: -1 });
+
+    const formatted = submissions.map(sub => {
+      const passed = sub.passedCount ?? 0;
+      const total = sub.totalTestCases ?? 0;
+      const accepted = total > 0 && passed === total;
+
+      return {
+        id: sub._id,
+        status: accepted ? 'Accepted' : 'Wrong Answer',
+        timestamp: new Date(sub.createdAt).toLocaleString(),
+        sourceCode: sub.sourceCode,
+        language: sub.language,
+        passed: passed,
+        total: total,
+        sessionId: sub.sessionId,
+        evaluationResults: sub.evaluationResults || [],
+        evalError: sub.evalError || null,
+      };
+    });
 
     res.json(formatted);
   } catch (err) {
@@ -42,11 +63,80 @@ router.get('/fetch', async (req, res) => {
 
 
 
+// Save submission record after evaluation
+router.post('/db', requireAuth, async (req, res) => {
+  console.log("========== SUBMISSION ==========");
+  console.log(req.body);
+  try {
+    const {
+      questionId,
+      sourceCode,
+      language,
+      passedCount = 0,
+      totalTestCases = 0,
+      evaluationResults = [],
+      evalError = null,
+      sessionId: requestedSessionId,
+      moduleId,
+      autoSubmitted = false,
+    } = req.body;
+    const userId = req.user.user_id;
+
+    if (!userId || !questionId) {
+      return res.status(400).json({ error: 'userId and questionId are required' });
+    }
+
+    let sessionId = requestedSessionId;
+    if (!sessionId) {
+      const session = await getActiveSessionForUser(userId);
+      sessionId = session.sessionId;
+    }
+
+    const submission = await Submission.create({
+      userId,
+      questionId,
+      sessionId,
+      moduleId,
+      sourceCode,
+      language,
+      passedCount,
+      totalTestCases,
+      evaluationResults,
+      evalError,
+      autoSubmitted,
+    });
+
+    res.json({ success: true, submissionId: submission._id });
+  } catch (err) {
+    console.error('[POST] /api/submission/db error:', err);
+    res.status(500).json({ error: err.message || 'Failed to save submission' });
+  }
+});
+
+router.get('/has-submission', requireAuth, async (req, res) => {
+  try {
+    const { sessionId, moduleId } = req.query;
+    const userId = req.user.user_id;
+    if (!sessionId) {
+      return res.status(400).json({ error: 'sessionId is required' });
+    }
+
+    const filter = { userId, sessionId };
+    if (moduleId) filter.moduleId = moduleId;
+
+    const latest = await Submission.findOne(filter).sort({ createdAt: -1 }).lean();
+    res.json({ hasSubmission: !!latest, latest });
+  } catch (err) {
+    console.error('[GET] /api/submission/has-submission error:', err);
+    res.status(500).json({ error: 'Failed to check submissions' });
+  }
+});
+
 // ========================= STUDENT ENDPOINTS =========================
 
-router.post('/evaluate/:studentId', async (req, res) => {
+router.post('/evaluate/:studentId', requireAuth, async (req, res) => {
   try {
-    const { userId } = req.params;
+    const userId = req.user.user_id;
     const { questionId, serverCode, clientCode } = req.body;
 
     if (!userId || !questionId || !serverCode || !clientCode) {
@@ -73,9 +163,9 @@ router.post('/evaluate/:studentId', async (req, res) => {
 });
 
 // Get all submissions for a student in the current session
-router.get('/student-submissions/:studentId', async (req, res) => {
+router.get('/student-submissions/:studentId', requireAuth, async (req, res) => {
   try {
-    const userId = req.params.studentId;
+    const userId = req.user.user_id;
     const sessionId = generateSessionId();
     if (!userId) return res.status(400).json({ error: 'Missing userId' });
     // Return all submissions for this student in this session

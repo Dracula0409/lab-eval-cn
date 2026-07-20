@@ -9,12 +9,14 @@ import {
   SparklesIcon,
   ArrowLeftIcon,
   AcademicCapIcon,
-  InformationCircleIcon
+  InformationCircleIcon,
+  ArrowRightOnRectangleIcon
 } from '@heroicons/react/24/outline';
 
 export default function Header({ 
   title, 
   timeLimit, 
+  totalTimeLimit,
   onTimeUp, 
   showQuestion = true, 
   onToggleQuestion,
@@ -22,7 +24,9 @@ export default function Header({
   backLink,
   backText,
   moduleInfo,
-  loadingQuestions
+  loadingQuestions,
+  onLogout,
+  onExitLab
 }) {
   return (
     <header className="bg-white/80 backdrop-blur-lg border-b border-gray-200/50 shadow-lg">
@@ -99,6 +103,16 @@ export default function Header({
               <span className="hidden lg:inline">{backText || 'Back'}</span>
             </Link>
           )}
+          {/* Logout button for teacher pages */}
+          {isTeacherPage && onLogout && (
+            <button
+              onClick={onLogout}
+              className="flex items-center space-x-2 px-4 py-2 text-sm font-medium text-red-600 hover:text-white bg-red-50 hover:bg-red-600 backdrop-blur-sm rounded-xl border border-red-200/50 shadow-sm hover:shadow-md transition-all duration-300"
+            >
+              <ArrowRightOnRectangleIcon className="w-4 h-4" />
+              <span className="hidden lg:inline">Logout</span>
+            </button>
+          )}
           
           {/* Question toggle (desktop only) */}
           {onToggleQuestion && (
@@ -119,13 +133,22 @@ export default function Header({
           )}
 
           {/* Timer - Only show for student pages */}
-          {!isTeacherPage && timeLimit && (
+          {!isTeacherPage && timeLimit != null && (
             <div className="flex items-center space-x-3 bg-gradient-to-r from-gray-50 to-gray-100 px-4 py-2 rounded-xl border border-gray-200/50 shadow-sm backdrop-blur-sm">
               <div className="p-1 bg-gradient-to-br from-orange-400 to-red-500 rounded-lg">
                 <ClockIcon className="w-5 h-5 text-white" />
               </div>
-              <Timer duration={timeLimit} onExpire={onTimeUp} />
+              <Timer duration={timeLimit} totalDuration={totalTimeLimit} onExpire={onTimeUp} />
             </div>
+          )}
+          {!isTeacherPage && onExitLab && (
+            <button
+              onClick={onExitLab}
+              className="flex items-center space-x-2 px-4 py-2 text-sm font-medium text-red-600 hover:text-white bg-red-50 hover:bg-red-600 backdrop-blur-sm rounded-xl border border-red-200/50 shadow-sm hover:shadow-md transition-all duration-300"
+            >
+              <ArrowRightOnRectangleIcon className="w-4 h-4" />
+              <span className="hidden lg:inline">Exit Lab</span>
+            </button>
           )}
         </div>
       </div>

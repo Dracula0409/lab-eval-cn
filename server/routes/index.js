@@ -6,36 +6,35 @@ import submissionRoute from './submission.js';
 import filesRoute from './file.js';
 import moduleRoutes from './modules.js';
 import sessionsRoute from './sessions.js';
+import evaluationRoute from './evaluation.js';
 import coursesRoute from './courses.js';
-import { saveFileToContainer, runAndEvaluate } from '../controllers/sshController.js';
+import performanceRoute from './performance.js';
+import authRoute from './auth.js';
+import batchesRoute from './batches.js';
+import dockerRoute from './docker.js';
+import { ensureSessionContainer, saveFileToContainer } from '../controllers/sshController.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
 router.use('/ping', pingRoute);
 router.use('/questions', questionsRoute);
 router.use('/submission', submissionRoute);
+router.use('/evaluation', evaluationRoute);
 router.use('/file',filesRoute);
 router.use('/modules', moduleRoutes);
 router.use('/sessions', sessionsRoute);
 router.use('/courses', coursesRoute);
+router.use('/performance', performanceRoute);
+router.use('/auth', authRoute);
+router.use('/batches', batchesRoute);
+router.use('/docker', dockerRoute);
 
-function generateSessionId() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = `${now.getMonth() + 1}`.padStart(2, '0');
-  const day = `${now.getDate()}`.padStart(2, '0');
-  const period = now.getHours() < 12 ? 'FN' : 'AN';
-  return `${year}${month}${day}_${period}`;
-}
+async function renameFileInContainer({ userId, oldPath, newPath, sessionId = null }) {
+  const { containerName } = await ensureSessionContainer(userId, sessionId);
+  const cmd = `mv "${oldPath}" "${newPath}"`;
 
-function renameFileInContainer({ userId, oldPath, newPath }) {
   return new Promise((resolve, reject) => {
-    const userId = 'testuser123'; //hardcoded for now, must use JWT
-    const sessionId = generateSessionId();
-    const containerName = `lab_exam_${userId}_${sessionId}`;
-    
-    const cmd = `mv ${oldPath} ${newPath}`;
-
     exec(`docker exec ${containerName} sh -c '${cmd}'`, (err, stdout, stderr) => {
       if (err) {
         console.error('Rename failed:', stderr || err);
@@ -47,13 +46,15 @@ function renameFileInContainer({ userId, oldPath, newPath }) {
 }
 
 // Save file to container
-router.post('/save-file', async (req, res) => {
+router.post('/save-file', requireAuth, async (req, res) => {
   try {
     // console.log('[API] save-file received:', req.body);
-    const { userId = 'testuser123', filename, filePath, code } = req.body;
+    const { filename, filePath, code, sessionId } = req.body;
+    const userId = req.user.user_id;
+
     if (!filename || !code) return res.status(400).json({ error: 'Missing filename or code' });
     console.log(filePath)
-    await saveFileToContainer({ userId, filename, filePath, code });
+    await saveFileToContainer({ userId, filename, filePath, code, sessionId });
     console.log('[API] save-file completed successfully');
     res.json({ success: true });
   } catch (err) {
@@ -62,52 +63,20 @@ router.post('/save-file', async (req, res) => {
   }
 });
 
-router.post('/rename-file', async (req, res) => {
+router.post('/rename-file', requireAuth, async (req, res) => {
   try {
-    const { userId = 'testuser123', oldPath, newPath } = req.body;
+    const { oldPath, newPath, sessionId } = req.body;
+    const userId = req.user.user_id;
     if (!oldPath || !newPath) {
       return res.status(400).json({ error: 'Missing oldPath or newPath' });
     }
 
-    await renameFileInContainer({ userId, oldPath, newPath });
+    await renameFileInContainer({ userId, oldPath, newPath, sessionId });
 
     console.log(`[API] Renamed file inside container for ${userId}`);
     res.json({ success: true });
   } catch (err) {
     console.error('[API] rename-file error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Run code and evaluate protocol/test cases
-router.post('/run-evaluate', async (req, res) => {
-  try {
-    const { 
-      userId = 'testuser123', 
-      filename, 
-      code, 
-      language, 
-      evaluationScript = 'server_evaluator.py', 
-      testCases = [],
-      clientCount = 1,
-      clientDelay = 0.5,
-    } = req.body;
-    if (!filename || !code || !language) {
-      return res.status(400).json({ error: 'Missing required fields (filename, code, language)' });
-    }
-    const result = await runAndEvaluate({ 
-      userId, 
-      filename, 
-      code, 
-      language, 
-      evaluationScript, 
-      testCases,
-      clientCount,
-      clientDelay,
-    });
-    res.json({ success: true, ...result });
-  } catch (err) {
-    console.error('[API] run-evaluate error:', err);
     res.status(500).json({ error: err.message });
   }
 });

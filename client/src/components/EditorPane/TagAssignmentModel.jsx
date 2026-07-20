@@ -22,7 +22,7 @@ export default function TagAssignmentModal({ tags = [], files = [], tagToFileMap
   return (
     <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg p-6 w-[400px] space-y-4">
-        <h2 className="text-lg font-semibold text-gray-800 mb-4">Assign File to Each Role</h2>
+        <h2 className="text-lg font-semibold text-gray-800 mb-4">Assign File to Each Tag</h2>
 
         {tags.map(tag => (
           <div key={tag} className="flex items-center justify-between">

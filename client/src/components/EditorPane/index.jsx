@@ -29,6 +29,7 @@ export default function EditorPane({
   onEvaluate,
   onSubmit,
   isRunning,
+  isEvaluating,
   isSubmitting,
   showQuestion,
   onToggleQuestion,
@@ -41,6 +42,8 @@ export default function EditorPane({
   tags,
   tagToFileMap,
   setTagToFileMap,
+  isFreeCoding,
+  onSave,
 }) {
   const [fontSize, setFontSize] = useState(14);
   const [theme, setTheme] = useState('vs-dark');
@@ -62,7 +65,7 @@ export default function EditorPane({
 
   const languages = [
     { value: 'c', label: 'C', icon: <WrenchIcon className="w-4 h-4 text-gray-700 inline" /> },
-    { value: 'python', label: 'Python', icon: <CodeBracketIcon className="w-4 h-4 text-green-600 inline" /> }
+    { value: 'java', label: 'Java', icon: <CodeBracketIcon className="w-4 h-4 text-orange-600 inline" /> }
   ];
 
   const themes = [
@@ -211,6 +214,11 @@ export default function EditorPane({
             value={activeFile.code}
             options={editorOptions}
             onChange={updateCode}
+            onMount={(editor, monaco) => {
+              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+                onSave?.();
+              });
+            }}
           />
         ) : (
           <div className="flex items-center justify-center h-full text-gray-500">
@@ -237,6 +245,8 @@ export default function EditorPane({
         showTerminal={showTerminal}
         setShowTerminal={setShowTerminal}
         onEvaluate={onEvaluate}
+        isEvaluating={isEvaluating}
+        isFreeCoding={isFreeCoding}
       />
 
       {/* Click outside to close settings */}

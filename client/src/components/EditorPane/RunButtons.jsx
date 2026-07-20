@@ -12,11 +12,13 @@ export default function RunButtons({
   onRun, 
   onSubmit, 
   isRunning, 
+  isEvaluating,
   isSubmitting, 
   activeFile, 
   showTerminal,
   setShowTerminal,
-  onEvaluate
+  onEvaluate,
+  isFreeCoding
 }) {
 
   return (
@@ -65,50 +67,53 @@ export default function RunButtons({
           )}
         </button>
 
-        {/* Evaluate button */}
-        <button
-          onClick={onEvaluate}
-          className={`
-            flex items-center space-x-2 px-4 py-2 rounded-xl font-semibold text-sm transition-all duration-300 shadow-lg
-            ${isSubmitting
-              ? 'bg-gradient-to-r from-gray-400 to-gray-500 text-white cursor-not-allowed'
-              : !activeFile
-              ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-              : 'bg-gradient-to-r from-yellow-500 to-orange-600 text-white hover:from-yellow-600 hover:to-orange-700 hover:shadow-xl hover:scale-105 active:scale-95'
-            }
-          `}
-          title="Evaluate Code"
-        >
-          <span>Evaluate</span>
-        </button>
+        {/* Evaluate button — hidden in free-coding mode, nothing to grade against */}
+        {!isFreeCoding && (
+          <button
+            onClick={onEvaluate}
+            disabled={isRunning || isEvaluating || isSubmitting}
+            className={`
+              flex items-center space-x-2 px-4 py-2 rounded-xl font-semibold text-sm transition-all duration-300 shadow-lg
+              ${isEvaluating || isSubmitting
+                ? 'bg-gradient-to-r from-gray-400 to-gray-500 text-white cursor-not-allowed'
+                : 'bg-gradient-to-r from-yellow-500 to-orange-600 text-white hover:from-yellow-600 hover:to-orange-700 hover:shadow-xl hover:scale-105 active:scale-95'
+              }
+            `}
+            title="Run communication evaluation"
+          >
+            {isEvaluating ? <span>Evaluating…</span> : <span>Evaluate</span>}
+          </button>
+        )}
 
-        {/* Submit button */}
-        <button
-          onClick={onSubmit}
-          disabled={isRunning || isSubmitting || !activeFile}
-          className={`
-            flex items-center space-x-2 px-4 py-2 rounded-xl font-semibold text-sm transition-all duration-300 shadow-lg
-            ${isSubmitting
-              ? 'bg-gradient-to-r from-gray-400 to-gray-500 text-white cursor-not-allowed'
-              : !activeFile
-              ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-              : 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:from-indigo-600 hover:to-purple-700 hover:shadow-xl hover:scale-105 active:scale-95'
-            }
-          `}
-          title={!activeFile ? 'No file to submit' : 'Submit solution'}
-        >
-          {isSubmitting ? (
-            <>
-              <ClockIcon className="w-4 h-4 animate-spin" />
-              <span>Submitting...</span>
-            </>
-          ) : (
-            <>
-              <PaperAirplaneIcon className="w-4 h-4" />
-              <span>Submit</span>
-            </>
-          )}
-        </button>
+        {/* Submit button — hidden in free-coding mode, nothing to submit against */}
+        {!isFreeCoding && (
+          <button
+            onClick={onSubmit}
+            disabled={isRunning || isSubmitting || !activeFile}
+            className={`
+              flex items-center space-x-2 px-4 py-2 rounded-xl font-semibold text-sm transition-all duration-300 shadow-lg
+              ${isSubmitting
+                ? 'bg-gradient-to-r from-gray-400 to-gray-500 text-white cursor-not-allowed'
+                : !activeFile
+                ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                : 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:from-indigo-600 hover:to-purple-700 hover:shadow-xl hover:scale-105 active:scale-95'
+              }
+            `}
+            title={!activeFile ? 'No file to submit' : 'Submit solution'}
+          >
+            {isSubmitting ? (
+              <>
+                <ClockIcon className="w-4 h-4 animate-spin" />
+                <span>Submitting...</span>
+              </>
+            ) : (
+              <>
+                <PaperAirplaneIcon className="w-4 h-4" />
+                <span>Submit</span>
+              </>
+            )}
+          </button>
+        )}
 
         {/* Show Terminal button */}
         {!showTerminal && (

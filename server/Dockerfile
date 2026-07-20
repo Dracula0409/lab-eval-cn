@@ -11,6 +11,7 @@ ENV LC_ALL=C.UTF-8
 RUN apt-get update && apt-get install -y \
     openssh-server \
     gcc g++ make \
+    openjdk-17-jdk \
     python3 python3-pip \
     iputils-ping \
     net-tools \
@@ -24,6 +25,8 @@ RUN apt-get update && apt-get install -y \
     libcap2-bin \
     sudo && \
     apt-get clean
+
+RUN apt-get update && apt-get install -y acl && apt-get clean
 
 # Create labuser (least privileges, no sudo)
 RUN useradd -m -s /bin/bash labuser && \
@@ -56,7 +59,9 @@ RUN mkdir /var/run/sshd && \
     echo "UsePAM yes" >> /etc/ssh/sshd_config && \
     echo "AcceptEnv LANG LC_*" >> /etc/ssh/sshd_config && \
     echo "TCPKeepAlive yes" >> /etc/ssh/sshd_config && \
-    echo "PermitTTY yes" >> /etc/ssh/sshd_config
+    echo "PermitTTY yes" >> /etc/ssh/sshd_config && \
+    echo "MaxSessions 100" >> /etc/ssh/sshd_config && \
+    echo "MaxStartups 100:30:200" >> /etc/ssh/sshd_config
 
 # Generate host SSH keys
 RUN ssh-keygen -A
@@ -86,14 +91,14 @@ RUN for user in labuser networklab; do \
     echo "export TERM=xterm-256color" >> /home/$user/.bashrc && \
     echo "export LANG=C.UTF-8" >> /home/$user/.bashrc && \
     echo "export LC_ALL=C.UTF-8" >> /home/$user/.bashrc && \
-    echo "alias sudo='echo Permission denied'" >> /home/$user/.bashrc && \
-    echo "alias su='echo Permission denied'" >> /home/$user/.bashrc && \
-    echo "alias chmod='echo Permission denied'" >> /home/$user/.bashrc && \
-    echo "alias chown='echo Permission denied'" >> /home/$user/.bashrc && \
-    echo "alias who='echo Permission denied'" >> /home/$user/.bashrc && \
-    echo "alias which='echo Permission denied'" >> /home/$user/.bashrc && \
-    echo "alias users='echo Permission denied'" >> /home/$user/.bashrc && \
-    echo "alias top='echo Permission denied'" >> /home/$user/.bashrc && \
+    #echo "alias sudo='echo Permission denied'" >> /home/$user/.bashrc && \
+    #echo "alias su='echo Permission denied'" >> /home/$user/.bashrc && \
+    #echo "alias chmod='echo Permission denied'" >> /home/$user/.bashrc && \
+    #echo "alias chown='echo Permission denied'" >> /home/$user/.bashrc && \
+    #echo "alias who='echo Permission denied'" >> /home/$user/.bashrc && \
+    #echo "alias which='echo Permission denied'" >> /home/$user/.bashrc && \
+    #echo "alias users='echo Permission denied'" >> /home/$user/.bashrc && \
+    #echo "alias top='echo Permission denied'" >> /home/$user/.bashrc && \
     chown root:root /home/$user/.bashrc && \
     chmod 444 /home/$user/.bashrc; \
     done
@@ -102,8 +107,10 @@ RUN for user in labuser networklab; do \
 RUN echo "networklab ALL=(ALL) NOPASSWD: /usr/bin/tcpdump, /sbin/sysctl, /usr/sbin/sysctl, /bin/sysctl, /usr/bin/sysctl" > /etc/sudoers.d/networklab_limited && \
     chmod 440 /etc/sudoers.d/networklab_limited
 
-# Allow sudo sysctl to write to read only files 
-RUN echo "alias sysctl='/usr/bin/sudo sysctl'" >> /home/networklab/.bashrc
+# Fixed CN evaluation framework (generic scripts — not per-question)
+COPY evaluation_framework/ /home/networklab/evaluation/
+RUN chmod +x /home/networklab/evaluation/*.sh && \
+    chown -R networklab:networklab /home/networklab/evaluation
 
 # Working directory for SSH login
 WORKDIR /home/labuser

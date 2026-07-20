@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Panel, PanelGroup } from 'react-resizable-panels';
 import axios from 'axios';
 import Header from '../components/Header';
@@ -8,19 +9,13 @@ import TerminalPane from '../components/TerminalPane';
 import FileSelectorModal from '../components/EditorPane/fileSelectorModal';
 import ResizeHandle from '../components/shared/ResizeHandle';
 import { useIsMobile } from '../components/utils/useIsMobile';
+import { summarizeResults } from '../components/utils/testcaseHelper';
 import { InformationCircleIcon } from '@heroicons/react/24/outline';
-
-// Create a hardcoded session ID for testing
-const TEST_SESSION_ID = "lab_session_" + Math.random().toString(36).substring(2, 15);
-
-// Save the session ID to localStorage if not already present
-if (!localStorage.getItem('labSessionId')) {
-  localStorage.setItem('labSessionId', TEST_SESSION_ID);
-  console.log('Created test lab session ID:', TEST_SESSION_ID);
-}
+import { API_BASE } from '../config';
 
 // Helper function to get current lab session ID
-const getCurrentLabSession = () => localStorage.getItem('labSessionId') || TEST_SESSION_ID;
+const getCurrentLabSession = () => window.__labSessionId || '';
+const LABUSER_HOME = '/home/labuser';
 
 
 const MobileTabs = ({ activeTab, setActiveTab, tabs }) => (
@@ -44,9 +39,168 @@ const MobileTabs = ({ activeTab, setActiveTab, tabs }) => (
   </div>
 );
 
+const EvaluationOverlay = ({ overlay, logBoxRef, onClose }) => {
+  if (!overlay.open) return null;
+
+  const ansiToHtml = (text) => {
+    const escapeHtml = (value) => value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+    const colorMap = {
+      30: '#111827',
+      31: '#ff5f56',
+      32: '#27c93f',
+      33: '#ffbd2e',
+      34: '#5e9cff',
+      35: '#d670d6',
+      36: '#56d4dd',
+      37: '#f8f8f2',
+      90: '#6b7280',
+      91: '#ff7b72',
+      92: '#7ee787',
+      93: '#f2cc60',
+      94: '#79c0ff',
+      95: '#d2a8ff',
+      96: '#a5f3fc',
+      97: '#ffffff',
+    };
+
+    let html = '';
+    let openSpan = false;
+    const parts = escapeHtml(text).split(/(\x1b\[[0-9;]*m)/g);
+    for (const part of parts) {
+      const match = part.match(/^\x1b\[([0-9;]*)m$/);
+      if (!match) {
+        html += part;
+        continue;
+      }
+
+      const codes = match[1].split(';').filter(Boolean).map(Number);
+      if (openSpan) {
+        html += '</span>';
+        openSpan = false;
+      }
+      if (codes.length === 0 || codes.includes(0)) continue;
+
+      const color = codes.map((code) => colorMap[code]).find(Boolean);
+      const bold = codes.includes(1);
+      if (color || bold) {
+        html += `<span style="${color ? `color:${color};` : ''}${bold ? 'font-weight:700;' : ''}">`;
+        openSpan = true;
+      }
+    }
+    if (openSpan) html += '</span>';
+    return html;
+  };
+
+  const logText = overlay.logs.join('');
+
+  return (
+    <div className="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4">
+      <div className="w-full max-w-3xl bg-[#101010] rounded-lg shadow-2xl border border-gray-700 overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-700 flex items-center justify-between bg-[#181818]">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-100">{overlay.title}</h2>
+            <p className="text-xs text-gray-400">
+              {overlay.running ? 'Evaluation is running. Please wait.' : 'Evaluation complete.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={overlay.running}
+            className="px-3 py-1.5 rounded-md text-sm font-medium bg-gray-800 text-gray-100 border border-gray-600 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Close
+          </button>
+        </div>
+        <div
+          ref={logBoxRef}
+          className="evaluation-terminal h-96 overflow-auto text-[13px] leading-5 p-4 whitespace-pre-wrap font-mono"
+          style={{ fontFamily: 'Menlo, Monaco, Consolas, "Liberation Mono", monospace' }}
+          dangerouslySetInnerHTML={{ __html: ansiToHtml(logText) }}
+        />
+      </div>
+    </div>
+  );
+};
+
+const TimeUpDialog = ({ state, onExit, onReview }) => {
+  if (!state.open) return null;
+
+  const message = state.submitting
+    ? 'Time is up. We are auto-submitting your answers now. Please wait.'
+    : state.autoSubmitted
+      ? 'Time is up. Auto-submit is complete. You can review the testcase results now, then exit.'
+      : state.alreadySubmitted
+        ? 'Time is up. Your latest submission is already recorded.'
+        : 'Time is up. This attempt cannot be continued.';
+
+  return (
+    <div className="fixed inset-0 z-[1100] bg-black/45 flex items-center justify-center p-4">
+      <div className="w-full max-w-md rounded-lg bg-white border border-gray-200 shadow-2xl p-5">
+        <h2 className="text-lg font-semibold text-gray-900">Time is up</h2>
+        <p className="mt-2 text-sm text-gray-600">{message}</p>
+        {state.error && (
+          <p className="mt-3 text-sm text-red-600">{state.error}</p>
+        )}
+        <div className="mt-5 flex justify-end gap-3">
+          {state.autoSubmitted && !state.submitting && (
+            <button
+              type="button"
+              onClick={onReview}
+              className="px-4 py-2 rounded-md border border-gray-300 bg-white text-gray-700 text-sm font-medium hover:bg-gray-50"
+            >
+              Review Results
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onExit}
+            disabled={state.submitting}
+            className="px-4 py-2 rounded-md bg-indigo-600 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {state.submitting ? 'Submitting...' : 'Exit'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const TimeLockedExit = ({ show, onExit }) => {
+  if (!show) return null;
+
+  return (
+    <div className="fixed bottom-5 right-5 z-[900] rounded-lg border border-red-200 bg-white shadow-xl p-3 flex items-center gap-3">
+      <span className="text-sm font-medium text-gray-700">Time is up. Editing is locked.</span>
+      <button
+        type="button"
+        onClick={onExit}
+        className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm font-medium"
+      >
+        Exit
+      </button>
+    </div>
+  );
+};
+
+const WorkspaceLoading = ({ message = 'Preparing your lab workspace...' }) => (
+  <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+    <div className="w-full max-w-sm rounded-lg border border-gray-200 bg-white shadow-sm p-6 text-center">
+      <div className="mx-auto mb-4 h-9 w-9 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-600" />
+      <h1 className="text-base font-semibold text-gray-900">CN Lab</h1>
+      <p className="mt-2 text-sm text-gray-600">{message}</p>
+    </div>
+  </div>
+);
+
 
 // Helper functions
-const getCurrentUser = () => 'testuser123'; // replace with jwt
+const getCurrentUser = () => window.__authUser?.user_id || '';
+const getStudentName = () => window.__authUser?.name || getCurrentUser();
 const getCurrentDateTime = () => {
   const now = new Date();
   return now.toISOString().slice(0, 19).replace('T', ' ');
@@ -56,7 +210,13 @@ const getCurrentDateTime = () => {
 
 
 export default function CNLabWorkspace() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const forceFreeCoding = searchParams.get('free') === '1';
+  const requestedModuleId = searchParams.get('moduleId') || '';
+  const requestedSessionId = searchParams.get('sessionId') || '';
   const isMobile = useIsMobile();
+  const [authReady, setAuthReady] = useState(false);
   const [activeTab, setActiveTab] = useState('question');
   const [language, setLanguage] = useState('c');
   const [showQuestion, setShowQuestion] = useState(true);
@@ -72,10 +232,74 @@ export default function CNLabWorkspace() {
   const [showFileModal, setShowFileModal] = useState(false);
   const [availableFiles, setAvailableFiles] = useState([]);
   const [isRunning, setIsRunning] = useState(false);
+  const [isEvaluating, setIsEvaluating] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [testCaseResults, setTestCaseResults] = useState([]);
+  const [testCaseResults, setTestCaseResults] = useState({});
+  const [questionPaneTab, setQuestionPaneTab] = useState('description');
+  const [evalMessage, setEvalMessage] = useState(null);
+  const [submissionRefreshTrigger, setSubmissionRefreshTrigger] = useState(0);
+  const [attemptInfo, setAttemptInfo] = useState(null);
+  const [evaluationOverlay, setEvaluationOverlay] = useState({
+    open: false,
+    title: '',
+    running: false,
+    logs: [],
+  });
+  const [timeUpDialog, setTimeUpDialog] = useState({
+    open: false,
+    submitting: false,
+    autoSubmitted: false,
+    alreadySubmitted: false,
+    error: '',
+  });
+  const [timeLocked, setTimeLocked] = useState(false);
+  const [closingSession, setClosingSession] = useState(false);
   const panelRef = useRef(null);
+  const logBoxRef = useRef(null);
+  const dirtyFileIdsRef = useRef(new Set());
+  const fileHydrationRequestRef = useRef(0);
+  const lastLoadedModuleIdRef = useRef(null);
+  const autoSubmitStartedRef = useRef(false);
+  const closeSentRef = useRef(false);
   // const [isSubmitted, setIsSubmitted] = useState(false);
+
+  useEffect(() => {
+    async function loadAuth() {
+      try {
+        const meRes = await axios.get(`${API_BASE}/api/auth/me`, { params: { role: 'student' } });
+        if (meRes.data.user.role !== 'student') {
+          navigate('/login');
+          return;
+        }
+        window.__authUser = meRes.data.user;
+        if (requestedSessionId) {
+          window.__labSessionId = requestedSessionId;
+        } else {
+          // Ensure /api/sessions/init is only called once even if this
+          // component mounts multiple times or other parts of the app
+          // try to initialize concurrently. Use a global promise slot.
+          if (!window.__labSessionInitPromise) {
+            window.__labSessionInitPromise = axios.post(`${API_BASE}/api/sessions/init`, {
+              mode: forceFreeCoding ? 'free' : 'lab',
+            }).then((res) => {
+              window.__labSessionId = res.data.sessionId;
+              return res;
+            }).catch((err) => {
+              // Reset promise on failure so callers can retry
+              window.__labSessionInitPromise = null;
+              throw err;
+            });
+          }
+
+          await window.__labSessionInitPromise;
+        }
+        setAuthReady(true);
+      } catch {
+        navigate('/login');
+      }
+    }
+    loadAuth();
+  }, [navigate, forceFreeCoding, requestedSessionId]);
 
   useEffect(() => {
     console.log(currentWorkingDir);
@@ -93,111 +317,139 @@ export default function CNLabWorkspace() {
       setModuleError(null);
       
       try {
-        // Check if we have a module ID in localStorage (set by the teacher)
-        const moduleId = localStorage.getItem('currentModuleId');
-        
-        if (moduleId) {
-          console.log('Found module ID in localStorage:', moduleId);
-          
-          // Fetch the module directly using the module ID
-          const response = await axios.get(`http://localhost:5001/api/modules/${moduleId}`);
-          
-          if (response.data) {
-            const moduleData = response.data;
-            
-            // Set module info
-            setModuleInfo({
-              _id: moduleData._id,
-              name: moduleData.name,
-              description: moduleData.description,
-              maxMarks: moduleData.maxMarks,
-              time: moduleData.time || "Not specified",
-              date: moduleData.date
-            });
-            
-            // Fetch questions for this module if not already included
-            let questionsData = moduleData.questions;
-            
-            // If questions are just IDs, fetch the full question data
-            if (moduleData.questions.length > 0 && typeof moduleData.questions[0] === 'string') {
-              const questionsResponse = await axios.get(`http://localhost:5001/api/modules/${moduleId}/questions`);
-              questionsData = questionsResponse.data;
-            }
-            
-            // Format questions for the question pane
-            const formattedQuestions = questionsData.map(q => ({
-              id: q._id,
-              title: q.title,
-              description: q.description,
-              precode: q.precode || {},
-              clientPrecode: q.clientPrecode || {},
-              solution: q.solution || {},
-              clientSolution: q.clientSolution || {},
-              clientCount: q.clientCount || 1,
-              clientDelay: q.clientDelay || 0.5,
-              testCases: q.testCases || { server: [], client: [] }
-            }));
-            
-            setQuestions(formattedQuestions);
-          } else {
-            throw new Error('Failed to load module data');
+        // Ask the server which module is assigned to THIS session, rather
+        // than relying on localStorage (which only exists on whichever
+        // browser the teacher happened to click "Send to Students" from).
+        const sessionId = getCurrentLabSession();
+
+        let moduleData = null;
+        if (!forceFreeCoding) {
+          try {
+            const currentModuleRes = await axios.get(
+              `${API_BASE}/api/sessions/${sessionId}/current-module`,
+              { params: { moduleId: requestedModuleId || undefined } }
+            );
+            moduleData = currentModuleRes.data;
+          } catch (moduleLookupErr) {
+            // 404 just means "no module assigned to this session yet" —
+            // expected before a teacher has sent one.
+            if (moduleLookupErr.response?.status !== 404) throw moduleLookupErr;
           }
-        } else {
-          // Fallback to static JSON if no module ID in localStorage
-          console.log('No module ID found, using static data');
-          const response = await fetch('/questionPool.json');
-          
-          if (!response.ok) {
-            throw new Error('Failed to fetch question data');
-          }
-          
-          const data = await response.json();
-          
+        }
+
+        if (moduleData) {
+          console.log('Loaded active module from server:', moduleData._id);
+
+          // Set module info
           setModuleInfo({
-            _id: "static_module",
-            name: "Computer Networks Lab (Demo)",
-            description: "TCP/IP Socket Programming Practice",
-            maxMarks: 50,
-            time: "2 hours",
+            _id: moduleData._id,
+            name: moduleData.name,
+            description: moduleData.description,
+            maxMarks: moduleData.maxMarks,
+            time: moduleData.time || "Not specified",
+            date: moduleData.date,
+            durationMinutes: moduleData.assignment?.durationMinutes || moduleData.durationMinutes || 60,
+            slotKey: moduleData.assignment?.slotKey || '',
+            endsAt: moduleData.assignment?.endsAt || null,
+            targetBatch: moduleData.assignment?.targetBatch || moduleData.targetBatch || '',
+            sessionSlot: moduleData.assignment?.sessionSlot || moduleData.sessionSlot || ''
+          });
+
+          // Fetch questions for this module if not already included
+          let questionsData = moduleData.questions;
+
+          // If questions are just IDs, fetch the full question data
+          if (moduleData.questions.length > 0 && typeof moduleData.questions[0] === 'string') {
+            const questionsResponse = await axios.get(`${API_BASE}/api/modules/${moduleData._id}/questions`);
+            questionsData = questionsResponse.data;
+          }
+
+          // Format questions for the question pane
+          const formattedQuestions = questionsData.map(q => ({
+            id: q._id,
+            title: q.title,
+            description: q.description,
+            questionKey: q.questionKey || 'q1',
+            files: q.files || [],
+            testcases: q.testcases || {},
+            input: q.input || '',
+            evalScript: q.evalScript || '',
+            maxMarks: q.maxMarks,
+          }));
+
+          setQuestions(formattedQuestions);
+          lastLoadedModuleIdRef.current = moduleData._id;
+          startOrRefreshAttempt(moduleData._id).catch((err) => {
+            console.error('Failed to start/refresh test attempt:', err);
+            setModuleError(err.response?.data?.error || 'Could not start your test timer.');
+          });
+        } else {
+          // No module currently assigned (teacher hasn't sent one, or
+          // explicitly cleared it) — give students an open editor instead
+          // of canned demo content.
+          console.log('No module assigned to this session, enabling free-coding mode');
+          setModuleInfo({
+            _id: "free_coding",
+            name: "Free Coding",
+            description: "No lab module has been assigned right now. Feel free to write and run any C program you'd like using the editor below.",
+            maxMarks: null,
+            time: null,
             date: new Date().toISOString()
           });
-          
-          setQuestions(data);
+          setAttemptInfo(null);
+
+          setQuestions([{
+            id: "free_coding",
+            title: "Free Coding",
+            description: "No lab module has been assigned right now. Write, run, and experiment with any C program you'd like — nothing here is graded.",
+            questionKey: "free",
+            files: [
+              { name: "main.c", tag: "main", precode: "#include <stdio.h>\n\nint main() {\n    // Write your code here\n    return 0;\n}\n" }
+            ],
+            testcases: {},
+            input: "",
+            evalScript: "",
+            maxMarks: null,
+          }]);
         }
       } catch (error) {
         console.error('Error loading module data:', error);
         setModuleError(error.response?.data?.error || error.message || 'Failed to load questions');
         
-        // Try to load from backup static source
-        try {
-          const backupResponse = await fetch('/questionPool.json');
-          if (!backupResponse.ok) throw new Error('Backup source unavailable');
-          
-          const backupData = await backupResponse.json();
-          setQuestions(backupData);
-          
-          // Create a fallback module
-          setModuleInfo({
-            _id: "fallback_module",
-            name: "Computer Networks Lab (Offline Mode)",
-            description: "Practice questions from local storage",
-            maxMarks: 50,
-            time: "Not timed",
-            date: new Date().toISOString()
-          });
-        } catch (backupError) {
-          console.error('Error loading backup questions:', backupError);
-          setQuestions([]);
-        }
+        // Something actually went wrong (not just "no module assigned") —
+        // still don't leave the student with a broken editor.
+        setModuleInfo({
+          _id: "free_coding",
+          name: "Free Coding",
+          description: "Couldn't reach the lab server just now. Feel free to write and run any C program you'd like using the editor below.",
+          maxMarks: null,
+          time: null,
+          date: new Date().toISOString()
+        });
+        setAttemptInfo(null);
+        setQuestions([{
+          id: "free_coding",
+          title: "Free Coding",
+          description: "Couldn't reach the lab server just now. Write, run, and experiment with any C program you'd like — nothing here is graded.",
+          questionKey: "free",
+          files: [
+            { name: "main.c", tag: "main", precode: "#include <stdio.h>\n\nint main() {\n    // Write your code here\n    return 0;\n}\n" }
+          ],
+          testcases: {},
+          input: "",
+          evalScript: "",
+          maxMarks: null,
+        }]);
       }
       
       setLoadingQuestions(false);
     };
     
-    fetchModuleData();
+    if (authReady) fetchModuleData();
     
     // Set up event listener for module changes
     const handleModuleChange = () => {
+      if (forceFreeCoding) return;
       console.log('Module change detected, refreshing...');
       fetchModuleData();
       
@@ -211,15 +463,23 @@ export default function CNLabWorkspace() {
     
     window.addEventListener('module-change', handleModuleChange);
     
-    // Check for module changes periodically
-    const checkModuleInterval = setInterval(() => {
-      const newModuleId = localStorage.getItem('currentModuleId');
-      const prevModuleId = sessionStorage.getItem('loadedModuleId');
-      
-      if (newModuleId && newModuleId !== prevModuleId) {
-        console.log('New module detected:', newModuleId);
-        sessionStorage.setItem('loadedModuleId', newModuleId);
-        handleModuleChange();
+    // Check for module changes periodically by asking the server, rather
+    // than watching a localStorage value that only exists on the teacher's
+    // own browser.
+    const checkModuleInterval = setInterval(async () => {
+      if (forceFreeCoding) return;
+      try {
+        const sessionId = getCurrentLabSession();
+        const res = await axios.get(`${API_BASE}/api/sessions/${sessionId}/current-module`, {
+          params: { moduleId: requestedModuleId || undefined },
+        });
+        const activeModuleId = res.data?._id;
+        if (activeModuleId && activeModuleId !== lastLoadedModuleIdRef.current) {
+          console.log('New module detected on server:', activeModuleId);
+          handleModuleChange();
+        }
+      } catch (err) {
+        // 404 just means no module assigned yet — try again next tick.
       }
     }, 5000);
     
@@ -227,35 +487,24 @@ export default function CNLabWorkspace() {
       window.removeEventListener('module-change', handleModuleChange);
       clearInterval(checkModuleInterval);
     };
-  }, []);
+  }, [authReady, forceFreeCoding, requestedModuleId]);
+
+  useEffect(() => {
+    if (!moduleInfo?._id || moduleInfo._id === 'free_coding') return undefined;
+
+    const interval = setInterval(() => {
+      startOrRefreshAttempt(moduleInfo._id).catch((err) => {
+        console.error('Failed to refresh test attempt:', err);
+      });
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [moduleInfo?._id]);
 
 
-  //tags for diff server and client codes
   function getTagsFromQuestion(question) {
-    if (!question) return [];
-
-    const tags = [];
-
-    const serverCount = Object.keys(question.precode || {}).length;
-    const clientCount = Object.keys(question.clientPrecode || {}).length;
-
-    if (serverCount === 1) {
-      tags.push('server');
-    } else {
-      for (let i = 1; i <= serverCount; i++) {
-        tags.push(`server${i}`);
-      }
-    }
-
-    if (clientCount === 1) {
-      tags.push('client');
-    } else {
-      for (let i = 1; i <= clientCount; i++) {
-        tags.push(`client${i}`);
-      }
-    }
-
-    return tags;
+    if (!question?.files?.length) return [];
+    return question.files.map(f => f.tag).filter(Boolean);
   }
   const tags = useMemo(() => {
   if (
@@ -266,6 +515,25 @@ export default function CNLabWorkspace() {
 
   return getTagsFromQuestion(questions[activeQuestionIdx]);
 }, [questions, activeQuestionIdx]);
+
+  const getTagAssignmentError = (currentTags = tags, currentMap = tagToFileMap, currentFiles = files) => {
+    if (!currentTags.length) {
+      return 'This question has no tags configured. Please ask the teacher to set file tags before submitting.';
+    }
+
+    const missingTags = currentTags.filter((tag) => !currentMap[tag]);
+    if (missingTags.length) {
+      return `Please specify files for: ${missingTags.join(', ')}.`;
+    }
+
+    const openPaths = new Set(currentFiles.map((file) => file.path));
+    const staleTags = currentTags.filter((tag) => !openPaths.has(currentMap[tag]));
+    if (staleTags.length) {
+      return `The selected file for ${staleTags.join(', ')} is no longer open. Please specify tags again.`;
+    }
+
+    return '';
+  };
 
 
   useEffect(() => {
@@ -282,83 +550,85 @@ export default function CNLabWorkspace() {
   }, []);
 
 
-  // setting test case results
   useEffect(() => {
     const onEval = (e) => {
-      const { results } = e.detail || {};
-      const currentQuestion = questions[activeQuestionIdx];
-      const questionId = currentQuestion?.id;
-
+      const { results, questionId } = e.detail || {};
       if (!questionId || !results) return;
 
-      const currentTestCases = currentQuestion?.testCases || [];
-      
-      // merge each result into corresponding test case
-      const processedResults = currentTestCases.map((tc, idx) => {
-        const result = results && results[idx] ? results[idx] : {};
-        return {
-          ...tc,
-          actualOutput: (result.stdout || '') + (result.stderr ? `\n${result.stderr}` : ''),
-          status: result.exitCode === 0 ? 'PASS' : 'FAIL',
-          exitCode: result.exitCode
-        };
-      });
-
-      // store results by question id
       setTestCaseResults(prev => ({
         ...prev,
-        [questionId]: processedResults
+        [questionId]: results,
       }));
     };
-    
+
     window.addEventListener('evaluation-complete', onEval);
     return () => window.removeEventListener('evaluation-complete', onEval);
-  }, [questions, activeQuestionIdx]);
+  }, []);
 
 
-  // When questions or activeQuestionIdx changes, set files from solution
   useEffect(() => {
-    if (questions && questions.length > 0 && questions[activeQuestionIdx]) {
+    if (questions?.length > 0 && questions[activeQuestionIdx]) {
       const activeQuestion = questions[activeQuestionIdx];
-      
-      // During development, use solution code instead of precode
-      // In production, you would use precode instead:
-      // const fileMap = { ...activeQuestion.precode, ...(activeQuestion.clientPrecode || {}) };
-      
-      // Use solution code for both server and client files during development
-      const fileMap = { 
-        ...(activeQuestion.solution || {}),
-        ...(activeQuestion.clientSolution || {})
-      };
-      
-      // Convert file map to files array
-      const filesFromSolution = Object.entries(fileMap).map(([filename, code]) => {
+      const requestId = fileHydrationRequestRef.current + 1;
+      fileHydrationRequestRef.current = requestId;
+
+      const loadFilesForQuestion = async () => {
+        const filesFromQuestion = await Promise.all((activeQuestion.files || []).map(async (f) => {
         let lang = 'plaintext';
-        if (filename.endsWith('.py')) lang = 'python';
-        else if (filename.endsWith('.c')) lang = 'c';
-        else if (filename.endsWith('.js')) lang = 'javascript';
-        else if (filename.endsWith('.html')) lang = 'html';
-        else if (filename.endsWith('.css')) lang = 'css';
-        
+        if (f.name?.endsWith('.java')) lang = 'java';
+        else if (f.name?.endsWith('.c')) lang = 'c';
+
+        const filePath = `${LABUSER_HOME}/${f.name}`;
+        let code = f.precode || '';
+
+        try {
+          const response = await axios.get(`${API_BASE}/api/file/read-file`, {
+            params: {
+              cwd: LABUSER_HOME,
+              filename: f.name,
+              sessionId: getCurrentLabSession(),
+            },
+          });
+          code = response.data?.code ?? code;
+        } catch {
+          // If the student has not created/saved this file yet, use the starter code.
+        }
+
         return {
-          id: filename.replace(/\.[^/.]+$/, ''),
-          name: filename.split('/').pop(), // just the filename
-          path: `${currentWorkingDir}/${filename}`, // full relative path
+          id: f.tag || f.name.replace(/\.[^/.]+$/, ''),
+          name: f.name,
+          tag: f.tag,
+          path: filePath,
           language: lang,
-          code: code
+          code,
         };
-      });
-      
-      setFiles(filesFromSolution);
-      if (filesFromSolution.length > 0) {
-        setActiveFileId(filesFromSolution[0].id);
+      }));
+
+      if (fileHydrationRequestRef.current !== requestId) return;
+
+      setFiles(filesFromQuestion);
+      dirtyFileIdsRef.current = new Set();
+      if (filesFromQuestion.length > 0) {
+        setActiveFileId(filesFromQuestion[0].id);
       }
+
+      const autoMap = {};
+      filesFromQuestion.forEach(f => {
+        if (f.tag) autoMap[f.tag] = f.path;
+      });
+      setTagToFileMap(autoMap);
+      };
+
+      loadFilesForQuestion();
     }
   }, [questions, activeQuestionIdx]);
 
 
   // Handle file operations
   const updateCode = (newCode) => {
+    if (activeFileId) {
+      dirtyFileIdsRef.current.add(activeFileId);
+    }
     setFiles(prevFiles => 
       prevFiles.map(f => 
         f.id === activeFileId ? {...f, code: newCode} : f
@@ -371,8 +641,10 @@ export default function CNLabWorkspace() {
   useEffect(() => {
     const timeoutId = setTimeout(() => {
       const activeFile = files.find(f => f.id === activeFileId);
-      if (activeFile && activeFile.code?.trim()) {
-        saveFile(activeFile);
+      if (activeFile && activeFile.code?.trim() && dirtyFileIdsRef.current.has(activeFile.id)) {
+        saveFile(activeFile).then(() => {
+          dirtyFileIdsRef.current.delete(activeFile.id);
+        });
       }
     }, 1000); // Debounce: wait 1 second after user stops typing
 
@@ -381,11 +653,12 @@ export default function CNLabWorkspace() {
 
 
   const addNewFile = () => {
+    if (timeLocked) return;
     if(!newFileCreated){
       return;
     }
 
-    const fileName = `new_file_${fileNo}.${language === 'c' ? 'c' : language === 'python' ? 'py' : 'txt'}`;
+    const fileName = `${language === 'java' ? 'Main' : 'new_file'}_${fileNo}.${language === 'java' ? 'java' : 'c'}`;
     
     const confirmCreate = window.confirm(
       `📁 This new file will be created in:\n\n  ${currentWorkingDir}\n\nFilename: ${fileName}\n\nIf you'd like to save it elsewhere, please change the directory in your terminal first.\n\nContinue?`
@@ -398,9 +671,10 @@ export default function CNLabWorkspace() {
 
     const timestamp = Date.now();
     const newId = `file_${timestamp}`;
-    const template = language === 'c' ? 
-      `"""\nNew C File\nAuthor: ${getCurrentUser()}\nCreated: ${getCurrentDateTime()} UTC\n"""\n\n# Your code here\n` :
-      `// New ${language} file\n// Author: ${getCurrentUser()}\n// Created: ${getCurrentDateTime()} UTC\n\n`;
+    const className = fileName.replace(/\.java$/, '');
+    const template = language === 'java'
+      ? `// New Java File\n// Author: ${getCurrentUser()}\n// Created: ${getCurrentDateTime()} UTC\n\npublic class ${className} {\n    public static void main(String[] args) {\n        // Write your code here\n    }\n}\n`
+      : `// New C File\n// Author: ${getCurrentUser()}\n// Created: ${getCurrentDateTime()} UTC\n\n#include <stdio.h>\n\nint main() {\n    // Write your code here\n    return 0;\n}\n`;
 
     setFiles(prevFiles => [
       ...prevFiles, 
@@ -412,6 +686,7 @@ export default function CNLabWorkspace() {
         language
       }
     ]);
+    dirtyFileIdsRef.current.add(newId);
     setActiveFileId(newId);
     setTimeout(() => {
       setNewFileCreated(true);
@@ -420,9 +695,10 @@ export default function CNLabWorkspace() {
 
 
   const openFile = async () => {
+    if (timeLocked) return;
     try {
-      const response = await axios.get('http://localhost:5001/api/file/list-files', {
-        params: { cwd: currentWorkingDir }
+      const response = await axios.get(`${API_BASE}/api/file/list-files`, {
+        params: { cwd: currentWorkingDir, sessionId: getCurrentLabSession() }
       });
       setAvailableFiles(response.data.files);
       setShowFileModal(true); // show modal
@@ -444,8 +720,8 @@ export default function CNLabWorkspace() {
     }
 
     try {
-      const res = await axios.get('http://localhost:5001/api/file/read-file', {
-        params: { filename: selected, cwd: currentWorkingDir }
+      const res = await axios.get(`${API_BASE}/api/file/read-file`, {
+        params: { filename: selected, cwd: currentWorkingDir, sessionId: getCurrentLabSession() }
       });
 
       const code = res.data.code;
@@ -457,7 +733,7 @@ export default function CNLabWorkspace() {
           name: selected,
           path: `${currentWorkingDir}/${selected}`,
           code,
-          language: selected.endsWith('.py') ? 'python' : 'c'
+          language: selected.endsWith('.java') ? 'java' : 'c'
         }
       ]);
       setActiveFileId(newId);
@@ -481,8 +757,10 @@ export default function CNLabWorkspace() {
 
   // Handle execution
   const handleRun = () => {
+    if (timeLocked) return;
     setIsRunning(true);
     setShowTerminal(true);
+    setActiveTab('terminal');
     const activeFile = files.find(f => f.id === activeFileId);
     if (!activeFile) {
       window.dispatchEvent(new CustomEvent('terminal-error', { detail: "No file selected" }));
@@ -495,12 +773,13 @@ export default function CNLabWorkspace() {
       : activeFile.path;
     
     setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('run-file-in-terminal', {
+      window.dispatchEvent(new CustomEvent('open-run-terminal', {
         detail: {
           code: activeFile.code,
-          filename: activeFile.name, // use full path including current directory
-          filePath: activeFile.path, // use full path including current directory
-          language: activeFile.language || language
+          filename: activeFile.name,
+          filePath: fullPath,
+          language: activeFile.language || language,
+          sessionId: getCurrentLabSession(),
         }
       }));
       setIsRunning(false);
@@ -509,20 +788,22 @@ export default function CNLabWorkspace() {
 
 
   const saveFile = async (file) => {
+    if (timeLocked) return;
     if (!file) return;
     try {
       setSaveStatus('saving');
       const payload = {
-        //userId: 'jwt-later',
         filename: file.name,
         filePath: file.path,
-        code: file.code
+        code: file.code,
+        sessionId: getCurrentLabSession(),
       };
 
-      await fetch('http://localhost:5001/api/save-file', {
+      await fetch(`${API_BASE}/api/save-file`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        credentials: 'include',
       });
 
       setSaveStatus('saved');
@@ -533,13 +814,154 @@ export default function CNLabWorkspace() {
     }
   };
 
+  const saveActiveFile = async () => {
+    if (timeLocked) return;
+    const file = files.find(f => f.id === activeFileId);
+    if (!file) return;
+    await saveFile(file);
+    dirtyFileIdsRef.current.delete(file.id);
+  };
+
+  const appendEvaluationLog = (line) => {
+    const text = line.endsWith('\n') ? line : `${line}\n`;
+    setEvaluationOverlay((prev) => ({
+      ...prev,
+      logs: [...prev.logs, text],
+    }));
+  };
+
+  useEffect(() => {
+    if (logBoxRef.current) {
+      logBoxRef.current.scrollTop = logBoxRef.current.scrollHeight;
+    }
+  }, [evaluationOverlay.logs]);
+
+  const runEvaluationWithLogs = async ({ endpoint, payload, title }) => {
+    setEvaluationOverlay({
+      open: true,
+      title,
+      running: true,
+      logs: [`${title} started...`],
+    });
+
+    const response = await fetch(`${API_BASE}/api/evaluation/${endpoint}?stream=1`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      credentials: 'include',
+    });
+
+    if (!response.ok || !response.body) {
+      const body = await response.text().catch(() => '');
+      throw new Error(body || `Evaluation failed with status ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalResult = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const event = JSON.parse(line);
+        if (event.event === 'log') {
+          appendEvaluationLog(event.message || '');
+        } else if (event.event === 'done') {
+          finalResult = event.result;
+          appendEvaluationLog('Evaluation finished.');
+        } else if (event.event === 'error') {
+          throw new Error(event.error || 'Evaluation failed.');
+        }
+      }
+    }
+
+    setEvaluationOverlay((prev) => ({ ...prev, running: false }));
+    return finalResult || {};
+  };
+
+  const startOrRefreshAttempt = async (moduleId) => {
+    if (!moduleId || moduleId === 'free_coding') return null;
+
+    let res;
+    try {
+      res = await axios.post(`${API_BASE}/api/sessions/test-attempts/start`, {
+        moduleId,
+        sessionId: getCurrentLabSession(),
+        slotKey: moduleInfo?.slotKey || undefined,
+      });
+    } catch (err) {
+      if (err.response?.status === 410) {
+        const message = err.response?.data?.error || 'Your test time is over.';
+        setAttemptInfo((prev) => ({ ...prev, remainingSeconds: 0 }));
+        setModuleError(message);
+        setTimeLocked(true);
+        setTimeUpDialog({
+          open: true,
+          submitting: false,
+          autoSubmitted: false,
+          alreadySubmitted: false,
+          error: '',
+        });
+      }
+      throw err;
+    }
+
+    setAttemptInfo(res.data);
+    return res.data;
+  };
+
+  useEffect(() => {
+    const handleSaveShortcut = (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        event.stopPropagation();
+        if (timeLocked) return;
+        saveActiveFile();
+      }
+    };
+
+    window.addEventListener('keydown', handleSaveShortcut, true);
+    return () => window.removeEventListener('keydown', handleSaveShortcut, true);
+  }, [files, activeFileId, timeLocked]);
+
+  useEffect(() => {
+    if (!timeLocked) return undefined;
+    const blockKeys = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    window.addEventListener('keydown', blockKeys, true);
+    return () => window.removeEventListener('keydown', blockKeys, true);
+  }, [timeLocked]);
+
+  useEffect(() => {
+    if (!evaluationOverlay.running) return;
+
+    const blockKeys = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    window.addEventListener('keydown', blockKeys, true);
+    return () => window.removeEventListener('keydown', blockKeys, true);
+  }, [evaluationOverlay.running]);
+
 
   //handle rename and code language change
   const renameFile = async (fileId, newName) => {
+    if (timeLocked) return;
     const extension = newName.split('.').pop().toLowerCase();
 
     let detectedLanguage = 'plaintext';
-    if (extension === 'py') detectedLanguage = 'python';
+    if (extension === 'java') detectedLanguage = 'java';
     else if (extension === 'c') detectedLanguage = 'c';
 
     const file = files.find(f => f.id === fileId);
@@ -563,19 +985,28 @@ export default function CNLabWorkspace() {
           : f
       )
     );
+    setTagToFileMap((prev) => {
+      const next = { ...prev };
+      if (file.tag) next[file.tag] = newPath;
+      for (const [tag, mappedPath] of Object.entries(next)) {
+        if (mappedPath === oldPath) next[tag] = newPath;
+      }
+      return next;
+    });
 
     setLanguage(detectedLanguage);
 
     // Notify backend to rename inside container
     try {
-      await fetch('http://localhost:5001/api/rename-file', {
+      await fetch(`${API_BASE}/api/rename-file`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: 'testuser123',  // or dynamically get userId if you have JWT/session
           oldPath,
-          newPath
-        })
+          newPath,
+          sessionId: getCurrentLabSession(),
+        }),
+        credentials: 'include',
       });
     } catch (err) {
       console.error('Failed to rename file in container:', err);
@@ -584,7 +1015,8 @@ export default function CNLabWorkspace() {
 
 
   const updateFileLanguage = async (fileId, newLang) => {
-    const newExt = newLang === 'c' ? 'c' : newLang === 'python' ? 'py' : '';
+    if (timeLocked) return;
+    const newExt = newLang === 'java' ? 'java' : 'c';
     const file = files.find(f => f.id === fileId);
     if (!file) return;
 
@@ -608,167 +1040,373 @@ export default function CNLabWorkspace() {
           : f
       )
     );
+    setTagToFileMap((prev) => {
+      const next = { ...prev };
+      if (file.tag) next[file.tag] = newPath;
+      for (const [tag, mappedPath] of Object.entries(next)) {
+        if (mappedPath === oldPath) next[tag] = newPath;
+      }
+      return next;
+    });
 
     // Notify backend to rename file inside container
     try {
-      await fetch('http://localhost:5001/api/rename-file', {
+      await fetch(`${API_BASE}/api/rename-file`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: 'testuser123',
           oldPath,
-          newPath
-        })
+          newPath,
+          sessionId: getCurrentLabSession(),
+        }),
+        credentials: 'include',
       });
     } catch (err) {
       console.error('Failed to rename file in container:', err);
     }
   };
 
-  const activeFile = files.find(f => f.id === activeFileId) || files[0];  
+  const activeFile = files.find(f => f.id === activeFileId) || files[0];
+  const isFreeCoding = moduleInfo?._id === 'free_coding';
+
   const handleEvaluate = async () => {
-    try {
-      if (!questions.length || !activeFile) return;      const currentQuestion = questions[activeQuestionIdx] || {};
-      
-      // Determine code type (server or client) based on filename
-      const isClient = activeFile.name.toLowerCase().includes('client');
-      const codeType = isClient ? 'client' : 'server';
-      
-      // Choose the appropriate evaluation script and test cases
-      const evaluationScript = isClient ? 'client_evaluator.py' : (currentQuestion.evaluationScript || 'server_evaluator.py');
-      
-      const testCases = currentQuestion.testCases?.[codeType] || [];
-      
-      const clientCount = currentQuestion.clientCount || 1;
-      const clientDelay = currentQuestion.clientDelay || 0.5;
+    if (timeLocked) return;
+    const currentQuestion = questions[activeQuestionIdx];
+    if (!currentQuestion) return;
 
-      console.log(`EVALUATE: Sending ${codeType} evaluation request:`, { 
-        evaluationScript, testCases, clientCount, clientDelay, codeType 
-      });
-
-      const response = await axios.post('http://localhost:5001/api/run-evaluate', {
-        filename: activeFile.name,
-        code: activeFile.code,
-        language: activeFile.language,
-        evaluationScript,
-        testCases,
-        clientCount,
-        clientDelay,
-        codeType
-      });
-      
-      // Process test results
-      const updatedTestCases = [];
-      if (response.data && response.data.results) {
-        // Map each test result to include all relevant information
-        response.data.results.forEach((result, idx) => {
-          const originalTest = testCases[idx] || {};
-          const resultParts = (result.stdout || '').split(':');
-          const status = resultParts.length > 1 ? resultParts[1] : 'FAIL';
-          const message = resultParts.length > 2 ? resultParts.slice(2).join(':') : result.stderr || 'Evaluation failed';
-          
-          updatedTestCases.push({
-            ...originalTest,  // Keep original test case properties
-            id: idx,          // Add an id for tracking
-            description: originalTest.description || `Test ${idx + 1}`,
-            points: originalTest.points || 0,
-            status: status,
-            actualOutput: message,
-            stderr: result.stderr || ''
-          });
-        });
-        
-        // Update test case results in the relevant question
-        const updatedQuestions = [...questions];
-        updatedQuestions[activeQuestionIdx] = {
-          ...currentQuestion,
-          [`testCaseResults_${codeType}`]: updatedTestCases
-        };
-        setQuestions(updatedQuestions);
-      }
-      
-      window.dispatchEvent(new CustomEvent('evaluation-complete', { 
-        detail: {
-          ...response.data,
-          testCaseResults: updatedTestCases
-        }
-      }));
-    } catch (err) {
-      console.error('Evaluate error', err);
+    const tagError = getTagAssignmentError();
+    if (tagError) {
+      alert(tagError);
+      return;
     }
-  }
+
+    setIsEvaluating(true);
+
+    try {
+      const requiredPaths = Object.values(tagToFileMap);
+      const filteredFiles = files.filter(f => requiredPaths.includes(f.path));
+
+      for (const file of filteredFiles) {
+        await axios.post(`${API_BASE}/api/save-file`, {
+          filename: file.name,
+          filePath: file.path,
+          code: file.code,
+          sessionId: getCurrentLabSession(),
+        });
+      }
+
+      const tagPaths = { ...tagToFileMap };
+      const sourceFiles = Object.fromEntries(filteredFiles.map(f => [f.name, f.code]));
+
+      const response = await runEvaluationWithLogs({
+        endpoint: 'run',
+        title: `Evaluating ${currentQuestion.questionKey || currentQuestion.title}`,
+        payload: {
+        sessionId: getCurrentLabSession(),
+        moduleId: moduleInfo?._id,
+        questionId: currentQuestion.id,
+        tagPaths,
+        sourceFiles,
+        },
+      });
+
+      const results = response?.results ?? [];
+      setTestCaseResults((prev) => ({
+        ...prev,
+        [currentQuestion.id]: results,
+      }));
+      setEvalMessage(null);
+      setQuestionPaneTab('testcases');
+      setShowQuestion(true);
+
+      const { total } = summarizeResults(results);
+      if (total === 0) {
+        const hint = response?.stderr?.trim() || 'Evaluation finished but no test results were produced. Check that your code compiles.';
+        setEvalMessage(hint);
+      }
+
+      window.dispatchEvent(new CustomEvent('evaluation-complete', {
+        detail: { results, questionId: currentQuestion.id },
+      }));
+    } catch (error) {
+      console.error('Evaluation failed:', error);
+      setEvaluationOverlay((prev) => ({
+        ...prev,
+        running: false,
+        logs: [...prev.logs, error.message || 'Evaluation failed.'],
+      }));
+      alert(error.response?.data?.error || 'Evaluation failed');
+    } finally {
+      setIsEvaluating(false);
+    }
+  };
 
 
   // Handle stopping all processes
   const handleStopAll = () => {
+    if (timeLocked) return;
     setShowTerminal(true);
     window.dispatchEvent(new CustomEvent('stop-all-processes'));
   };
 
-
-  //Handle Sumission - eval of test cases and log to DB
-  const handleSubmit = async () => {
-    if (Object.keys(tagToFileMap).length !== tags.length) {
-      alert('⚠️ Please assign a file for every required tag before submitting.');
+  const handleExitWorkspace = async ({ confirmExit = true } = {}) => {
+    if (closingSession) return;
+    if (confirmExit && !window.confirm('Exit this lab now? Your current container will be stopped.')) {
       return;
     }
-    
+
+    try {
+      setClosingSession(true);
+      // Instruct terminals to stop and avoid reconnecting
+      window.dispatchEvent(new CustomEvent('close-session'));
+      window.dispatchEvent(new CustomEvent('stop-all-processes'));
+      const sessionId = getCurrentLabSession();
+      if (sessionId) {
+        closeSentRef.current = true;
+        const closeRes = await axios.post(`${API_BASE}/api/sessions/close`, { sessionId });
+        console.log('Closed lab session:', closeRes.data);
+        if (closeRes.data?.stopped === false) {
+          alert(`Lab container was not stopped: ${closeRes.data.reason || 'unknown reason'}`);
+        }
+      }
+      navigate('/student-dashboard');
+    } catch (err) {
+      console.error('Failed to close lab session:', err);
+      alert(err.response?.data?.error || 'Failed to stop the lab container. Please try Exit Lab again.');
+      setClosingSession(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!authReady) return undefined;
+
+    const closeOnLeave = () => {
+      const sessionId = getCurrentLabSession();
+      if (!sessionId || closeSentRef.current) return;
+      closeSentRef.current = true;
+      // Ensure terminal clients don't reconnect while we're closing server-side
+      try { window.dispatchEvent(new CustomEvent('close-session')); } catch (_) {}
+      window.dispatchEvent(new CustomEvent('stop-all-processes'));
+
+      const body = JSON.stringify({ sessionId });
+      fetch(`${API_BASE}/api/sessions/close`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        credentials: 'include',
+        keepalive: true,
+      }).catch(() => {});
+    };
+
+    window.addEventListener('pagehide', closeOnLeave);
+    window.addEventListener('beforeunload', closeOnLeave);
+
+    return () => {
+      window.removeEventListener('pagehide', closeOnLeave);
+      window.removeEventListener('beforeunload', closeOnLeave);
+    };
+  }, [authReady]);
+
+
+  const handleSubmit = async () => {
+    if (timeLocked) return null;
+    return submitQuestion(questions[activeQuestionIdx], { autoSubmitted: false, useActiveFiles: true });
+  };
+
+  const submitQuestion = async (question, { autoSubmitted = false, useActiveFiles = false } = {}) => {
+    if (!question || question.id === 'free_coding') return null;
+
+    const expectedTags = useActiveFiles ? tags : getTagsFromQuestion(question);
+    const tagError = useActiveFiles
+      ? getTagAssignmentError(expectedTags, tagToFileMap, files)
+      : expectedTags.length
+        ? ''
+        : 'This question has no tags configured. Please ask the teacher to set file tags before submitting.';
+    if (tagError) {
+      if (autoSubmitted) return null;
+      alert(tagError);
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
-      const question = questions[activeQuestionIdx];
+      let effectiveTagMap = tagToFileMap;
+      let filteredFiles = files.filter(f => Object.values(effectiveTagMap).includes(f.path));
 
-      const requiredFileNames = Object.values(tagToFileMap);
-      const filteredFiles = files.filter(f => requiredFileNames.includes(f.path));
-      console.log(filteredFiles);
-      const sourceCode = Object.fromEntries(filteredFiles.map(f => [f.name, f.code]));
+      if (!useActiveFiles) {
+        effectiveTagMap = {};
+        filteredFiles = await Promise.all((question.files || []).map(async (f) => {
+          const filePath = `${LABUSER_HOME}/${f.name}`;
+          let code = f.precode || '';
+          try {
+            const response = await axios.get(`${API_BASE}/api/file/read-file`, {
+              params: { cwd: LABUSER_HOME, filename: f.name, sessionId: getCurrentLabSession() },
+            });
+            code = response.data?.code ?? code;
+          } catch {
+            // Use starter code if no saved file exists for this question.
+          }
+          if (f.tag) effectiveTagMap[f.tag] = filePath;
+          return {
+            id: f.tag || f.name,
+            name: f.name,
+            path: filePath,
+            language: f.name?.endsWith('.java') ? 'java' : 'c',
+            code,
+          };
+        }));
+      }
 
-      // Step 1 (mocked for now)
-      // const evalRes = await fetch('/api/submission/eval', { ... });
-      // const { passedCount, totalTestCases } = await evalRes.json();
+      for (const file of filteredFiles) {
+        await axios.post(`${API_BASE}/api/save-file`, {
+          filename: file.name,
+          filePath: file.path,
+          code: file.code,
+          sessionId: getCurrentLabSession(),
+        });
+      }
 
-      const passedCount = testCaseResults.filter(tc => tc.status === 'PASS').length || 5;
-      const totalTestCases = testCaseResults.length || 5; // 5/5 for testing
+      const tagPaths = { ...effectiveTagMap };
+      const sourceFiles = Object.fromEntries(filteredFiles.map(f => [f.name, f.code]));
 
-      // Step 2: Submit to DB
-      const payload = {
-        userId: getCurrentUser(),
+      const evalRes = await runEvaluationWithLogs({
+        endpoint: 'submit',
+        title: autoSubmitted
+          ? `Auto-submitting ${question.questionKey || question.title}`
+          : `Submitting ${question.questionKey || question.title}`,
+        payload: {
+        sessionId: getCurrentLabSession(),
+        moduleId: moduleInfo?._id,
         questionId: question.id,
-        module: question.module || 'Week1', //Assume module name for now
-        sourceCode,
-        language,
-        passedCount,
-        totalTestCases,
-      };
-
-      const res = await fetch('http://localhost:5001/api/submission/db', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        tagPaths,
+        sourceFiles,
+        },
       });
 
-      const data = await res.json();
-      if (data.success) {
-        alert('✅ Submitted successfully!');
-      } else {
-        throw new Error(data.error);
+      if (evalRes?.results) {
+        setTestCaseResults((prev) => ({
+          ...prev,
+          [question.id]: evalRes.results,
+        }));
       }
+
+      const results = evalRes?.results ?? [];
+      const testcaseCount = Object.keys(question.testcases || {}).length;
+      const { passed: passedFromResults } = summarizeResults(results);
+      const correctCount = results.length > 0 ? passedFromResults : 0;
+      const totalCount = results.length > 0 ? results.length : testcaseCount;
+
+      const submitDbRes = await fetch(`${API_BASE}/api/submission/db`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          questionId: question.id,
+          sessionId: getCurrentLabSession(),
+          moduleId: moduleInfo?._id,
+          module: moduleInfo?.name || 'CN Lab',
+          sourceCode: sourceFiles,
+          language: filteredFiles[0]?.language || 'c',
+          passedCount: correctCount,
+          totalTestCases: totalCount,
+          evaluationResults: results,
+          evalError: results.length === 0 ? (evalRes?.stderr?.trim() || null) : null,
+          autoSubmitted,
+        }),
+        credentials: 'include',
+      });
+
+      if (!submitDbRes.ok) {
+        const body = await submitDbRes.json().catch(() => ({}));
+        throw new Error(body.error || `Failed to save submission (status ${submitDbRes.status})`);
+      }
+
+      const statusLabel = totalCount > 0 && correctCount === totalCount ? 'All test cases passed' : `${correctCount}/${totalCount} test cases passed`;
+      setSubmissionRefreshTrigger((n) => n + 1);
+      if (!autoSubmitted) alert(`Submitted successfully. ${statusLabel}`);
+      return { questionId: question.id, statusLabel };
     } catch (err) {
       console.error('[Frontend] Submission error:', err);
-      alert('❌ Failed to submit.');
+      setEvaluationOverlay((prev) => ({
+        ...prev,
+        running: false,
+        logs: [...prev.logs, err.message || 'Submission failed.'],
+      }));
+      if (!autoSubmitted) alert(err.response?.data?.error || 'Failed to submit.');
+      return null;
     } finally {
       setIsSubmitting(false);
     }
   };
 
 
-  const handleTimeUp = () => {
-    alert("[Time] Time's up! Your code will be automatically submitted.");
-    handleSubmit();
+  const handleTimeUp = async () => {
+    if (autoSubmitStartedRef.current || isFreeCoding || !moduleInfo?._id) return;
+    autoSubmitStartedRef.current = true;
+    setTimeLocked(true);
+    setTimeUpDialog({
+      open: true,
+      submitting: false,
+      autoSubmitted: false,
+      alreadySubmitted: false,
+      error: '',
+    });
+
+    try {
+      const res = await axios.get(`${API_BASE}/api/submission/has-submission`, {
+        params: {
+          sessionId: getCurrentLabSession(),
+          moduleId: moduleInfo._id,
+        },
+      });
+
+      if (!res.data?.hasSubmission) {
+        setTimeUpDialog({
+          open: true,
+          submitting: true,
+          autoSubmitted: false,
+          alreadySubmitted: false,
+          error: '',
+        });
+        for (const q of questions) {
+          await submitQuestion(q, {
+            autoSubmitted: true,
+            useActiveFiles: q.id === questions[activeQuestionIdx]?.id,
+          });
+        }
+        setQuestionPaneTab('testcases');
+        setShowQuestion(true);
+        setTimeUpDialog({
+          open: true,
+          submitting: false,
+          autoSubmitted: true,
+          alreadySubmitted: false,
+          error: '',
+        });
+      } else {
+        setTimeUpDialog({
+          open: true,
+          submitting: false,
+          autoSubmitted: false,
+          alreadySubmitted: true,
+          error: '',
+        });
+      }
+    } catch (err) {
+      setTimeUpDialog({
+        open: true,
+        submitting: false,
+        autoSubmitted: false,
+        alreadySubmitted: false,
+        error: err.response?.data?.error || err.message || 'Auto-submit could not finish.',
+      });
+    }
   };
 
 
   const question = questions && questions.length > 0 ? questions[activeQuestionIdx] : undefined;
+  const remainingSeconds = attemptInfo?.remainingSeconds ?? ((moduleInfo?.durationMinutes || 60) * 60);
+  const totalSeconds = attemptInfo?.totalSeconds ?? remainingSeconds;
 
 
   // Keep window.questions and window.activeQuestionIdx in sync for evaluation
@@ -797,16 +1435,40 @@ export default function CNLabWorkspace() {
     }
   }, []);
 
+  if (!authReady || loadingQuestions || !moduleInfo || !questions.length || closingSession) {
+    return (
+      <WorkspaceLoading
+        message={closingSession ? 'Closing your lab container...' : 'Preparing your lab workspace...'}
+      />
+    );
+  }
+
   // Mobile layout
 
   // Mobile layout
   if (isMobile) {
     return (
       <div className="flex flex-col h-screen bg-gray-50">
+        <EvaluationOverlay
+          overlay={evaluationOverlay}
+          logBoxRef={logBoxRef}
+          onClose={() => setEvaluationOverlay((prev) => ({ ...prev, open: false }))}
+        />
+        <TimeUpDialog
+          state={timeUpDialog}
+          onExit={() => handleExitWorkspace({ confirmExit: false })}
+          onReview={() => setTimeUpDialog((prev) => ({ ...prev, open: false }))}
+        />
+        <TimeLockedExit
+          show={timeLocked && !timeUpDialog.open}
+          onExit={() => handleExitWorkspace({ confirmExit: false })}
+        />
         <Header
           title={question ? question.title : 'No questions available'}
           onTimeUp={handleTimeUp}
-          timeLimit={question && question.timeLimit ? question.timeLimit : 3600}
+          timeLimit={isFreeCoding ? null : remainingSeconds}
+          totalTimeLimit={isFreeCoding ? null : totalSeconds}
+          onExitLab={() => handleExitWorkspace()}
         />
         <MobileTabs
           activeTab={activeTab}
@@ -823,7 +1485,12 @@ export default function CNLabWorkspace() {
               questions={questions}
               activeQuestionIdx={activeQuestionIdx}
               setActiveQuestionIdx={setActiveQuestionIdx}
-              testCaseResults={testCaseResults}
+              testCaseResults={testCaseResults[questions[activeQuestionIdx]?.id] || []}
+              activeTab={questionPaneTab}
+              setActiveTab={setQuestionPaneTab}
+              evalMessage={evalMessage}
+              submissionRefreshTrigger={submissionRefreshTrigger}
+              sessionId={getCurrentLabSession()}
             />
           )}
           {activeTab === 'editor' && (
@@ -843,11 +1510,13 @@ export default function CNLabWorkspace() {
               saveStatus={saveStatus}
               renameFile={renameFile}
               updateFileLanguage={updateFileLanguage}
+              onSave={saveActiveFile}
             />
           )}
           {activeTab === 'terminal' && (
             <TerminalPane
               onClose={() => setActiveTab('editor')}
+              sessionId={getCurrentLabSession()}
             />
           )}
         </div>
@@ -860,14 +1529,30 @@ export default function CNLabWorkspace() {
   // Desktop layout
   return (
     <div className="flex flex-col h-screen bg-white">
+      <EvaluationOverlay
+        overlay={evaluationOverlay}
+        logBoxRef={logBoxRef}
+        onClose={() => setEvaluationOverlay((prev) => ({ ...prev, open: false }))}
+      />
+      <TimeUpDialog
+        state={timeUpDialog}
+        onExit={() => handleExitWorkspace({ confirmExit: false })}
+        onReview={() => setTimeUpDialog((prev) => ({ ...prev, open: false }))}
+      />
+      <TimeLockedExit
+        show={timeLocked && !timeUpDialog.open}
+        onExit={() => handleExitWorkspace({ confirmExit: false })}
+      />
       <Header
         title={moduleInfo ? moduleInfo.name : (question ? question.title : 'No questions available')}
         onTimeUp={handleTimeUp}
-        timeLimit={question && question.timeLimit ? question.timeLimit : 3600}
+        timeLimit={isFreeCoding ? null : remainingSeconds}
+        totalTimeLimit={isFreeCoding ? null : totalSeconds}
         showQuestion={showQuestion}
         onToggleQuestion={() => setShowQuestion(!showQuestion)}
         moduleInfo={moduleInfo}
         loadingQuestions={loadingQuestions}
+        onExitLab={() => handleExitWorkspace()}
       />
       
       <div className="flex-1 overflow-hidden">
@@ -895,12 +1580,17 @@ export default function CNLabWorkspace() {
                         </div>
                       </div>
                     ) : (
-                      <QuestionPane 
+                      <QuestionPane
                         questions={questions}
                         activeQuestionIdx={activeQuestionIdx}
                         setActiveQuestionIdx={setActiveQuestionIdx}
                         onClose={() => setShowQuestion(false)}
                         testCaseResults={testCaseResults[questions[activeQuestionIdx]?.id] || []}
+                        activeTab={questionPaneTab}
+                        setActiveTab={setQuestionPaneTab}
+                        evalMessage={evalMessage}
+                        submissionRefreshTrigger={submissionRefreshTrigger}
+                        sessionId={getCurrentLabSession()}
                       />
                     )}
                   </Panel>
@@ -924,6 +1614,7 @@ export default function CNLabWorkspace() {
                   onSubmit={handleSubmit}
                   onStopAll={handleStopAll}
                   isRunning={isRunning}
+                  isEvaluating={isEvaluating}
                   isSubmitting={isSubmitting}
                   showQuestion={showQuestion}
                   onToggleQuestion={() => setShowQuestion(true)}
@@ -936,6 +1627,8 @@ export default function CNLabWorkspace() {
                   tags={tags}
                   tagToFileMap={tagToFileMap}
                   setTagToFileMap={setTagToFileMap}
+                  isFreeCoding={isFreeCoding}
+                  onSave={saveActiveFile}
                 />
               </Panel>
             </PanelGroup>
@@ -954,6 +1647,7 @@ export default function CNLabWorkspace() {
               onClose={() => setShowTerminal(false)} 
               termVisible={showTerminal} 
               setCurrentWorkingDir={setCurrentWorkingDir} 
+              sessionId={getCurrentLabSession()}
             />
           </Panel>
         </PanelGroup>

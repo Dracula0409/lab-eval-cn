@@ -48,3 +48,17 @@ code {
 .ProseMirror pre br {
   white-space: pre !important;
 }
+
+.evaluation-terminal {
+  background: #000 !important;
+  color: #f8f8f2 !important;
+  border: 0 !important;
+  margin: 0 !important;
+  tab-size: 4;
+}
+
+.evaluation-terminal::selection,
+.evaluation-terminal *::selection {
+  background: #334155 !important;
+  color: #ffffff !important;
+}

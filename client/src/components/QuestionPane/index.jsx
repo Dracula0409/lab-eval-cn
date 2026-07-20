@@ -3,6 +3,7 @@ import Submissions from './Submissions';
 import TestSelector from './TestSelector';
 import QuestionTabs from './QuestionTabs';
 import { processCodeBlocks } from '../utils/codeBlockHelper';
+import { API_BASE } from '../../config';
 import { 
   XMarkIcon,
   AcademicCapIcon,
@@ -14,7 +15,12 @@ export default function QuestionPane({
   activeQuestionIdx, 
   setActiveQuestionIdx, 
   onClose, 
-  testCaseResults 
+  testCaseResults,
+  activeTab: controlledTab,
+  setActiveTab: setControlledTab,
+  evalMessage,
+  submissionRefreshTrigger = 0,
+  sessionId = '',
 }) {
   if (!questions || !Array.isArray(questions) || questions.length === 0) {
     return (
@@ -23,7 +29,9 @@ export default function QuestionPane({
       </div>
     );
   }
-  const [activeTab, setActiveTab] = useState('description');
+  const [internalTab, setInternalTab] = useState('description');
+  const activeTab = controlledTab ?? internalTab;
+  const setActiveTab = setControlledTab ?? setInternalTab;
   const question = questions[activeQuestionIdx];
   const [processedDescription, setProcessedDescription] = useState('');
   
@@ -75,15 +83,7 @@ export default function QuestionPane({
           </div>
         </div>        <div className="flex items-center space-x-2 text-sm text-gray-600 bg-gray-50 px-3 py-2 rounded-full border border-gray-200">
             <AcademicCapIcon className="w-4 h-4 text-blue-500" />
-            <span className="font-medium">
-              {Array.isArray(question.testCases) 
-                ? question.testCases?.reduce((sum, tc) => sum + (tc.points || 0), 0) 
-                : (
-                    (question.testCases?.server?.reduce((sum, tc) => sum + (tc.points || 0), 0) || 0) +
-                    (question.testCases?.client?.reduce((sum, tc) => sum + (tc.points || 0), 0) || 0)
-                  )
-              } points
-            </span>
+            <span className="font-medium">{question.maxMarks ?? '—'} marks (teacher assigned)</span>
         </div>
       </div>
 
@@ -105,7 +105,7 @@ export default function QuestionPane({
             {/* Render separate image if question.image is present */}
             {question.image && (
               <img
-                src={question.image.startsWith('http') ? question.image : `http://localhost:5001${question.image}`}
+                src={question.image.startsWith('http') ? question.image : `${API_BASE}${question.image}`}
                 alt="Question Illustration"
                 className="mt-4 rounded-lg border border-gray-200 shadow-sm max-w-full"
                 style={{ maxHeight: 320 }}
@@ -115,20 +115,13 @@ export default function QuestionPane({
         )}
         {activeTab === 'precode' && (
           <div className="p-6 fade-in-up space-y-4">
-            {/* Show precode and clientPrecode if available */}
-            {question.precode && Object.keys(question.precode).map((fname) => (
-              <div key={fname}>
-                <div className="font-mono text-xs text-gray-500 mb-1">Starter code: <b>{fname}</b></div>
+            {(question.files || []).map((f) => (
+              <div key={f.tag + f.name}>
+                <div className="font-mono text-xs text-gray-500 mb-1">
+                  <b>{f.name}</b> (tag: {f.tag})
+                </div>
                 <pre className="bg-gray-100 border border-gray-200 rounded-lg p-3 text-xs overflow-x-auto mb-4">
-                  {question.precode[fname]}
-                </pre>
-              </div>
-            ))}
-            {question.clientPrecode && Object.keys(question.clientPrecode).map((fname) => (
-              <div key={fname}>
-                <div className="font-mono text-xs text-gray-500 mb-1">Client starter code: <b>{fname}</b></div>
-                <pre className="bg-gray-100 border border-gray-200 rounded-lg p-3 text-xs overflow-x-auto mb-4">
-                  {question.clientPrecode[fname]}
+                  {f.precode}
                 </pre>
               </div>
             ))}
@@ -136,20 +129,20 @@ export default function QuestionPane({
         )}          
         {activeTab === 'testcases' && (
           <div className="fade-in-up">
-            {console.log('QuestionPane passing to TestSelector:', { 
-              question, 
-              questionTestCases: question?.testCases,
-              testCaseResults 
-            })}
             <TestSelector 
               question={question}
               testCaseResults={testCaseResults}
+              evalMessage={evalMessage}
             />
           </div>
         )}
         {activeTab === 'submissions' && (
           <div>
-            <Submissions userId= { 'testuser123' } questionId= { question.id } /> 
+            <Submissions
+              questionId={question.id}
+              sessionId={sessionId}
+              refreshTrigger={submissionRefreshTrigger}
+            />
           </div>
         )}
       </div>

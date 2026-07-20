@@ -4,6 +4,7 @@ import axios from 'axios';
 import Header from '../components/Header';
 import { PlusIcon } from '@heroicons/react/24/outline';
 import { TabButton } from '../components/FormComponents';
+import { API_BASE } from '../config';
 import { 
   SendModuleModal, 
   ModuleTable, 
@@ -11,22 +12,24 @@ import {
   ModuleForm, 
   QuestionForm 
 } from '../components/TeacherComponents';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 // Updated initial question including evaluation settings and matchType in testCases
 const initialQuestion = {
   title: '',
   description: '',
-  precode: { 'server.c': '// Add starter code here\n' },
-  clientPrecode: { 'client.c': '// Add starter code here\n' },
-  solution: { 'server.c': '// Add solution code here\n' },
-  clientSolution: { 'client.c': '// Add solution code here\n' },
-  testCases: {
-    server: [{ input: '', expectedOutput: '', description: '', points: 5, matchType: 'exact' }],
-    client: []
+  questionKey: 'q1',
+  maxMarks: 15,
+  files: [
+    { name: 'server.c', tag: 's1', precode: '#include <stdio.h>\n// server starter\n' },
+    { name: 'client.c', tag: 'c1', precode: '#include <stdio.h>\n// client starter\n' },
+  ],
+  testcases: {
+    testcase1: [[0], { c1_to_s1: 'Hi' }, [0], { s1_to_c1: 'Hi' }],
+    testcase2: [[0], { c1_to_s1: 'OpenAI' }, [0], { s1_to_c1: 'OpenAI' }],
   },
-  evaluationScript: '',
-  clientCount: 0,
-  clientDelay: 0,
+  input: 'Hi\nOpenAI\n',
+  evalScript: `START_TCPDUMP "tcp" "\${SERVER_PORT[0]}" "transfer.pcap"\nsleep 2\n\nCOMPILE_RUN "\$TAG_s1" myserver \${SERVER_PORT[0]}\nCHECK_PORT "127.0.0.1:\${SERVER_PORT[0]}" "0.0.0.0:0000" myserver tcp LISTEN\n\nfor tc in 1 2; do\n  COMPILE_RUN "\$TAG_c1" myclient \${CLIENT_PORT[0]}\n  INPUT myclient input \${tc} 1\n  sleep 2\n  END_TCPDUMP\n  EVALUATE tcp \${tc}\n  START_TCPDUMP "tcp" "\${SERVER_PORT[0]}" "transfer.pcap"\n  sleep 1\ndone\n\nCLEAR_ALL`,
 };
 
 // Module form initial values
@@ -34,7 +37,11 @@ const initialModule = {
   moduleName: '',
   description: '',
   lab: '123',
-  maxMarks: ''
+  maxMarks: '',
+  date: new Date().toISOString().slice(0, 10),
+  durationMinutes: 60,
+  targetBatch: '',
+  sessionSlot: 'AN'
 };
 
 export default function TeacherUpload() {
@@ -57,6 +64,42 @@ export default function TeacherUpload() {
   const [showBulkUploadModal, setShowBulkUploadModal] = useState(false);
   const [bulkUploadStatus, setBulkUploadStatus] = useState({ total: 0, uploaded: 0, failed: 0 });
   const [isBulkUploading, setIsBulkUploading] = useState(false);
+  const [batches, setBatches] = useState([]);
+  const [activeAssignments, setActiveAssignments] = useState([]);
+  const [moduleDefaults, setModuleDefaults] = useState(initialModule);
+  const [teacher, setTeacher] = useState(null);
+
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    axios.get(`${API_BASE}/api/auth/me`, { params: { role: 'teacher' } })
+      .then((res) => {
+        if (!['faculty', 'admin'].includes(res.data.user.role)) {
+          navigate('/teacher-login');
+          return;
+        }
+        setTeacher(res.data.user);
+      })
+      .catch(() => navigate('/teacher-login'));
+  }, [navigate]);
+
+  const [searchParams] = useSearchParams();
+
+  // Deep-link support from the Teacher Dashboard, e.g. /teacher-upload?tab=modules&labSession=1
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab === 'upload' || tab === 'manage' || tab === 'modules') {
+      setActiveTab(tab);
+    }
+    if (searchParams.get('labSession') === '1') {
+      setIsLabSession(true);
+    }
+  }, [searchParams]);
+
+  const handleLogout = async () => {
+    await axios.post(`${API_BASE}/api/auth/logout`, { role: 'teacher' }).catch(() => {});
+    navigate('/teacher-login');
+  };
 
   // Initialize react-hook-form for question
   const questionForm = useForm({
@@ -84,6 +127,7 @@ export default function TeacherUpload() {
   useEffect(() => {
     fetchQuestions();
     fetchModules();
+    fetchBatches();
     // Only fetch sessions if in lab session mode
     if (isLabSession) {
       fetchSessions();
@@ -92,7 +136,7 @@ export default function TeacherUpload() {
 
   const fetchQuestions = async () => {
     try {
-      const response = await axios.get('http://localhost:5001/api/questions');
+      const response = await axios.get(`${API_BASE}/api/questions`);
       setQuestions(response.data);
     } catch (err) {
       console.error('Error fetching questions:', err);
@@ -101,17 +145,35 @@ export default function TeacherUpload() {
   
   const fetchModules = async () => {
     try {
-      const response = await axios.get('http://localhost:5001/api/modules');
+      const response = await axios.get(`${API_BASE}/api/modules`);
       setModules(response.data);
     } catch (err) {
       console.error('Error fetching modules:', err);
+    }
+  };
+
+  const fetchActiveAssignments = async () => {
+    try {
+      const response = await axios.get(`${API_BASE}/api/modules/active-assignments`);
+      setActiveAssignments(response.data || []);
+    } catch (err) {
+      console.error('Error fetching active assignments:', err);
+    }
+  };
+
+  const fetchBatches = async () => {
+    try {
+      const response = await axios.get(`${API_BASE}/api/batches`);
+      setBatches(response.data || []);
+    } catch (err) {
+      console.error('Error fetching batches:', err);
     }
   };
   
   const fetchSessions = async () => {
     try {
       // Fetch active sessions from the backend
-      const response = await axios.get('http://localhost:5001/api/sessions/active');
+      const response = await axios.get(`${API_BASE}/api/sessions/active`);
       
       if (response.data && response.data.length > 0) {
         setSessions(response.data);
@@ -212,7 +274,7 @@ export default function TeacherUpload() {
         // Upload the image
         const formData = new FormData();
         formData.append('image', file);
-        const response = await axios.post('http://localhost:5001/api/questions/upload-image', formData);
+        const response = await axios.post(`${API_BASE}/api/questions/upload-image`, formData);
         
         // Replace the base64 string with the returned URL
         processedDescription = processedDescription.replace(fullMatch, `src="${response.data.url}"`);
@@ -221,25 +283,27 @@ export default function TeacherUpload() {
       // Remove unnecessary fields (like evalType) that are not defined in the schema
       const { evalType, ...payload } = data;
 
-      // Build the payload without stringifying object fields. Our backend expects
-      // precode, clientPrecode, solution, clientSolution, and testCases to be objects.
       const questionData = {
         ...payload,
         description: processedDescription,
-        precode: data.precode,
-        clientPrecode: data.clientPrecode,
-        solution: data.solution,
-        clientSolution: data.clientSolution,
-        testCases: data.testCases,
-        moduleType: "CNQuestion",
-        lab: "123" // Replace with a valid lab ID 
+        moduleType: 'CNQuestion',
+        lab: '123',
       };
 
+      delete questionData.precode;
+      delete questionData.clientPrecode;
+      delete questionData.solution;
+      delete questionData.clientSolution;
+      delete questionData.testCases;
+      delete questionData.evaluationScript;
+      delete questionData.clientCount;
+      delete questionData.clientDelay;
+
       if (editingQuestionId) {
-        await axios.put(`http://localhost:5001/api/questions/${editingQuestionId}`, questionData);
+        await axios.put(`${API_BASE}/api/questions/${editingQuestionId}`, questionData);
         setMessage('Question updated successfully!');
       } else {
-        await axios.post('http://localhost:5001/api/questions', questionData);
+        await axios.post(`${API_BASE}/api/questions`, questionData);
         setMessage('Question uploaded successfully!');
       }
 
@@ -268,7 +332,7 @@ export default function TeacherUpload() {
     if (!confirm('Are you sure you want to delete this question?')) return;
     
     try {
-      await axios.delete(`http://localhost:5001/api/questions/${id}`);
+      await axios.delete(`${API_BASE}/api/questions/${id}`);
       fetchQuestions();
     } catch (err) {
       alert(`Error deleting question: ${err.message}`);
@@ -317,7 +381,7 @@ export default function TeacherUpload() {
           // Upload the image
           const formData = new FormData();
           formData.append('image', file);
-          const response = await axios.post('http://localhost:5001/api/questions/upload-image', formData);
+          const response = await axios.post(`${API_BASE}/api/questions/upload-image`, formData);
           
           // Replace the base64 string with the returned URL
           processedDescription = processedDescription.replace(fullMatch, `<img src="${response.data.url}" alt="Question image" />`);
@@ -333,7 +397,7 @@ export default function TeacherUpload() {
       }));
       
       // Use the bulk upload endpoint to create all questions at once
-      const response = await axios.post('http://localhost:5001/api/questions/bulk', processedQuestions);
+      const response = await axios.post(`${API_BASE}/api/questions/bulk`, processedQuestions);
       const { results } = response.data;
       
       // Update status
@@ -403,18 +467,22 @@ export default function TeacherUpload() {
         description: data.description,
         lab: data.lab,
         questions: selectedQuestionIds,
-        creator: "teacherId_placeholder", // Replace with authenticated teacher's id
+        creator: teacher?.user_id || 'networklab',
         maxMarks: data.maxMarks,
+        date: data.date,
+        durationMinutes: data.durationMinutes,
+        targetBatch: data.targetBatch,
+        sessionSlot: data.sessionSlot,
       };
       
       let response;
       if (editingModuleId) {
         // Update existing module
-        response = await axios.put(`http://localhost:5001/api/modules/${editingModuleId}`, payload);
+        response = await axios.put(`${API_BASE}/api/modules/${editingModuleId}`, payload);
         setMessage("Module updated successfully!");
       } else {
         // Create new module
-        response = await axios.post('http://localhost:5001/api/modules', payload);
+        response = await axios.post(`${API_BASE}/api/modules`, payload);
         setMessage("Module created successfully!");
       }
       
@@ -422,6 +490,7 @@ export default function TeacherUpload() {
         setMessageType('success');
         // Reset form and selection
         moduleForm.reset();
+        setModuleDefaults(initialModule);
         setSelectedQuestionIds([]);
         setIsCreatingModule(false);
         setEditingModuleId(null);
@@ -439,13 +508,18 @@ export default function TeacherUpload() {
   };
 
   const editModule = (module) => {
-    // Set form values
-    moduleForm.reset({
+    const defaults = {
       moduleName: module.name,
       description: module.description || '',
       lab: module.lab,
-      maxMarks: module.maxMarks
-    });
+      maxMarks: module.maxMarks,
+      date: module.date ? new Date(module.date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+      durationMinutes: module.durationMinutes || 60,
+      targetBatch: module.targetBatch || '',
+      sessionSlot: module.sessionSlot || 'AN'
+    };
+    setModuleDefaults(defaults);
+    moduleForm.reset(defaults);
     
     // Set selected questions
     setSelectedQuestionIds(module.questions.map(q => typeof q === 'object' ? q._id : q));
@@ -460,7 +534,7 @@ export default function TeacherUpload() {
     if (!confirm('Are you sure you want to delete this module?')) return;
     
     try {
-      await axios.delete(`http://localhost:5001/api/modules/${id}`);
+      await axios.delete(`${API_BASE}/api/modules/${id}`);
       fetchModules();
       setMessage('Module deleted successfully!');
       setMessageType('success');
@@ -475,11 +549,34 @@ export default function TeacherUpload() {
     setSelectedQuestionIds([]);
     setEditingModuleId(null);
     moduleForm.reset();
+    setModuleDefaults(initialModule);
   };
 
   const openSendModuleModal = (moduleId) => {
     setSelectedModuleToSend(moduleId);
+    fetchActiveAssignments();
     setShowSendModuleModal(true);
+  };
+
+  const clearActiveModule = async (assignmentId = null, all = false) => {
+    const prompt = all
+      ? 'Clear all currently active modules?'
+      : 'Clear this active module?';
+    if (!confirm(prompt)) return;
+
+    setIsLoading(true);
+    try {
+      await axios.post(`${API_BASE}/api/modules/active-assignment/clear`, { assignmentId, all });
+      setMessage(all ? 'All active modules cleared.' : 'Active module cleared.');
+      setMessageType('success');
+      await fetchActiveAssignments();
+    } catch (error) {
+      console.error('Error clearing active module:', error);
+      setMessage(error.response?.data?.error || 'Failed to clear the active module.');
+      setMessageType('error');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const sendModuleToStudents = async () => {
@@ -492,23 +589,24 @@ export default function TeacherUpload() {
     setIsLoading(true);
     
     try {
-      // Use a hardcoded test session ID for simplicity
-      const testSessionId = "lab_session_test";
-      
-      // Make the API request to assign the module to the test session
-      const response = await axios.post(`http://localhost:5001/api/modules/${selectedModuleToSend}/assign-to-test-session`, {});
+      // Broadcast-assigns this module to every active session server-side
+      // (see Session.activeModule) — every student's browser picks it up on
+      // its next poll, regardless of which device/browser they're on.
+      const moduleInfo = modules.find(m => m._id === selectedModuleToSend);
+      const response = await axios.post(`${API_BASE}/api/modules/${selectedModuleToSend}/assign-to-test-session`, {
+        targetBatch: moduleInfo?.targetBatch || '',
+        sessionSlot: moduleInfo?.sessionSlot || '',
+        durationMinutes: moduleInfo?.durationMinutes || 60,
+      });
       
       if (response.data && response.data.success) {
-        const moduleInfo = modules.find(m => m._id === selectedModuleToSend);
         const moduleName = moduleInfo ? moduleInfo.name : 'Selected module';
         
         setMessage(`${moduleName} successfully sent to students`);
         setMessageType('success');
         
-        // Update localStorage for test purposes so CNLabWorkspace can access it
-        localStorage.setItem('currentModuleId', selectedModuleToSend);
-        
-        // Dispatch a custom event that CNLabWorkspace can listen for
+        // Dispatch a custom event so CNLabWorkspace tabs open in *this* browser
+        // refresh immediately, instead of waiting for their next poll.
         window.dispatchEvent(new CustomEvent('module-change', { 
           detail: { 
             moduleId: selectedModuleToSend,
@@ -517,6 +615,7 @@ export default function TeacherUpload() {
         }));
         
         // Close the modal
+        await fetchActiveAssignments();
         setShowSendModuleModal(false);
         setSelectedModuleToSend(null);
         setSelectedSessionId('');
@@ -525,27 +624,8 @@ export default function TeacherUpload() {
       }
     } catch (error) {
       console.error('Error sending module:', error);
-      
-      // Simplified approach - even if the backend call fails, we'll set the module ID in localStorage
-      // This allows the student view to pick it up for demo purposes
-      localStorage.setItem('currentModuleId', selectedModuleToSend);
-      
-      // Dispatch a custom event that CNLabWorkspace can listen for
-      const moduleInfo = modules.find(m => m._id === selectedModuleToSend);
-      window.dispatchEvent(new CustomEvent('module-change', { 
-        detail: { 
-          moduleId: selectedModuleToSend,
-          moduleName: moduleInfo?.name || 'New module' 
-        } 
-      }));
-      
-      setMessage(`Module assigned for test purposes (bypassing backend validation)`);
-      setMessageType('success');
-      
-      // Close the modal
-      setShowSendModuleModal(false);
-      setSelectedModuleToSend(null);
-      setSelectedSessionId('');
+      setMessage(error.response?.data?.error || 'Failed to send module to students. Please check the server and try again.');
+      setMessageType('error');
     } finally {
       setIsLoading(false);
     }
@@ -598,8 +678,9 @@ export default function TeacherUpload() {
       <Header 
         title={isCreatingModule ? "Create Module" : isLabSession ? "Lab Session Management" : "Question Management"} 
         isTeacherPage={true}
-        backLink="/"
-        backText="Back to Home"
+        backLink="/teacher-dashboard"
+        backText="Back to Dashboard"
+        onLogout={handleLogout}
       />
       
       {/* Lab Session Toggle */}
@@ -686,7 +767,8 @@ export default function TeacherUpload() {
             {isCreatingModule ? (
               <div className="px-6 py-4">
                 <ModuleForm
-                  initialModule={initialModule}
+                  key={editingModuleId || 'new-module'}
+                  initialModule={moduleDefaults}
                   questions={questions}
                   selectedQuestionIds={selectedQuestionIds}
                   toggleQuestionSelection={toggleQuestionSelection}
@@ -695,6 +777,7 @@ export default function TeacherUpload() {
                   editingModuleId={editingModuleId}
                   cancelModuleCreation={cancelModuleCreation}
                   setSelectedQuestionIds={setSelectedQuestionIds}
+                  batches={batches}
                 />
               </div>
             ) : activeTab === 'upload' ? (
@@ -706,18 +789,11 @@ export default function TeacherUpload() {
                   errors={errors}
                   control={control}
                   reset={reset}
+                  setValue={setValue}
                   initialQuestion={initialQuestion}
                   editingQuestionId={editingQuestionId}
                   isLoading={isLoading}
                   watchedValues={watchedValues}
-                  codeType={codeType}
-                  setCodeType={setCodeType}
-                  handleCodeChange={handleCodeChange}
-                  addCodeFile={addCodeFile}
-                  deleteCodeFile={deleteCodeFile}
-                  addTestCase={addTestCase}
-                  removeTestCase={removeTestCase}
-                  handleTestCaseChange={handleTestCaseChange}
                   getLanguageFromFilename={getLanguageFromFilename}
                 />
               </div>
@@ -752,10 +828,18 @@ export default function TeacherUpload() {
                 </h2>
                 
                 {isLabSession && (
-                  <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
+                  <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md flex items-center justify-between">
                     <p className="text-sm text-blue-800">
                       <span className="font-bold">Lab Session Mode Active:</span> You can send modules to students and make quick updates during the session.
                     </p>
+                    <button
+                      type="button"
+                      onClick={() => clearActiveModule(null, true)}
+                      disabled={isLoading}
+                      className="ml-4 px-3 py-1.5 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 disabled:opacity-50 whitespace-nowrap"
+                    >
+                      Clear Sent Modules
+                    </button>
                   </div>
                 )}
                 
@@ -778,6 +862,7 @@ export default function TeacherUpload() {
                       setIsCreatingModule(true);
                       setEditingModuleId(null);
                       moduleForm.reset(initialModule);
+                      setModuleDefaults(initialModule);
                       setSelectedQuestionIds([]);
                     }}
                     className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
@@ -807,6 +892,9 @@ export default function TeacherUpload() {
         isLoading={isLoading}
         moduleId={selectedModuleToSend}
         modules={modules}
+        activeAssignments={activeAssignments}
+        onClearAssignment={(assignmentId) => clearActiveModule(assignmentId)}
+        onClearAllAssignments={() => clearActiveModule(null, true)}
       />
       
       {/* Bulk Upload Modal */}

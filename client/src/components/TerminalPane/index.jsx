@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import TerminalTabs from './TerminalTabs';
 import TerminalComponent from './Terminal';
 import { v4 as uuidv4 } from 'uuid';
@@ -11,25 +11,29 @@ import { v4 as uuidv4 } from 'uuid';
 export default function TerminalPane({ 
   onClose,
   termVisible,
-  setCurrentWorkingDir
+  setCurrentWorkingDir = () => {},
+  sessionId = ''
 }) {
-  const jwtToken = localStorage.getItem('jwt'); // assuming JWT is stored here
-
   const [terminals, setTerminals] = useState([
     { id: 'main', name: 'Main Terminal', buffer: [] }
   ]);
 
   const [activeTerminalId, setActiveTerminalId] = useState('main');
 
-  const addTerminal = () => {
+  const createTerminal = ({ name } = {}) => {
     const newId = uuidv4();
     const newTerminal = {
       id: newId,
-      name: `Terminal ${terminals.length + 1}`,
+      name: name || `Terminal ${terminals.length + 1}`,
       buffer: [],
     };
     setTerminals(prev => [...prev, newTerminal]);
     setActiveTerminalId(newId);
+    return newId;
+  };
+
+  const addTerminal = () => {
+    createTerminal();
   };
 
   const closeTerminal = (terminalId) => {
@@ -50,7 +54,23 @@ export default function TerminalPane({
     )
   }
 
-  const activeTerminal = terminals.find(t => t.id === activeTerminalId) || terminals[0];
+  useEffect(() => {
+    const onOpenRunTerminal = (event) => {
+      const runId = createTerminal({ name: event.detail?.filename ? `Run ${event.detail.filename}` : 'Run' });
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('run-file-in-terminal', {
+          detail: {
+            ...event.detail,
+            targetTerminalId: runId,
+            sessionId,
+          },
+        }));
+      }, 500);
+    };
+
+    window.addEventListener('open-run-terminal', onOpenRunTerminal);
+    return () => window.removeEventListener('open-run-terminal', onOpenRunTerminal);
+  }, [sessionId, terminals.length]);
 
   const TerminalRender = terminals.map((term) => (
     <TerminalComponent
@@ -58,34 +78,15 @@ export default function TerminalPane({
       isVisible={term.id === activeTerminalId}
       isTermVisible= {termVisible}
       terminalId={term.id}
+      sessionId={sessionId}
       initialBuffer={term.buffer}
       onData={chunk => updateBuffer(term.id, chunk)}
-      token={jwtToken}
       setCurrentWorkingDir={(termId, cwd) => setCurrentWorkingDir(cwd)} 
     />
   ));
 
   return (
     <div className="flex flex-col h-full bg-gray-900">
-      {/* <div className="flex items-center justify-between py-0.5 px-3 bg-gray-800 border-b border-gray-700">
-        <div className="flex items-center space-x-3">
-          <CommandLineIcon className="w-5 h-5 text-green-400" />
-          <h2 className="text-md font-semibold text-white">Terminal</h2>
-        </div>
-
-        <div className="flex items-center space-x-2">
-          {onClose && (
-            <button
-              onClick={onClose}
-              className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
-              title="Close terminal"
-            >
-              <XMarkIcon className="w-5 h-5" />
-            </button>
-          )}
-        </div>
-      </div> */}
-
       <TerminalTabs
         terminals={terminals}
         activeTerminalId={activeTerminalId}

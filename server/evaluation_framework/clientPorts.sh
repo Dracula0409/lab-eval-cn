@@ -1,0 +1,13 @@
+#!/bin/bash
+
+declare -a CLIENT_PORT
+declare -a PROXY_PORT
+declare -a SERVER_PORT
+
+
+CLIENT_PORT[0]=5001
+CLIENT_PORT[1]=5002
+CLIENT_PORT[2]=5003
+
+SERVER_PORT[0]=1025
+

@@ -16,6 +16,13 @@ const ModuleSchema = new mongoose.Schema(
     creator: { type: String }, // String-based creator ID for flexibility
     creatorId: { type: String }, // Keep for backward compatibility
     maxMarks: { type: Number, default: 0 }, // total marks for the module
+    durationMinutes: { type: Number, default: 60 },
+    targetBatch: { type: String, default: "" },
+    sessionSlot: {
+      type: String,
+      enum: ["AN", "FN", ""],
+      default: ""
+    },
     moduleType: { type: String, required: true },
     metadata: { type: Object, default: {} }, // For compatibility with Test.metadata
     envSettings: {

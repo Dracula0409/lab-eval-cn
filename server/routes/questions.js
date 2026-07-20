@@ -2,7 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { Question } from '../models/Question.js';
+import { Question, CNQuestion } from '../models/Question.js';
 
 const router = express.Router();
 
@@ -53,7 +53,8 @@ router.post('/', async (req, res) => {
     // });
 
     // Create and save the question
-    const question = new Question(questionData);
+    const Model = questionData.moduleType === 'CNQuestion' ? CNQuestion : Question;
+    const question = new Model(questionData);
     await question.save();
     
     res.status(201).json({ 
@@ -102,7 +103,7 @@ router.post('/bulk', async (req, res) => {
     for (const questionData of questions) {
       try {
         // Create new question
-        const newQuestion = new Question(questionData);
+        const newQuestion = new CNQuestion({ ...questionData, moduleType: 'CNQuestion' });
         await newQuestion.save();
         
         results.success.push({
@@ -129,14 +130,27 @@ router.post('/bulk', async (req, res) => {
 // PUT api/questions/:id - update(edit) question
 router.put('/:id', async (req, res) => {
   try {
-    const updatedQuestion = await Question.findByIdAndUpdate(
-      req.params.id,
-      req.body,
-      { new: true } // Return the updated document
-    );
-    if (!updatedQuestion) {
+    // Look up the existing doc via the base model first (discriminators share
+    // the same collection, so this always finds it regardless of type) to
+    // find out which concrete model it actually is.
+    const existing = await Question.findById(req.params.id);
+    if (!existing) {
       return res.status(404).json({ message: 'Question not found' });
     }
+
+    // IMPORTANT: must update through the correct discriminator model.
+    // Updating a CNQuestion through the base `Question` model silently drops
+    // CN-only fields (files, testcases, evalScript, input) because Mongoose's
+    // default strict mode only allows fields defined on the model you call
+    // findByIdAndUpdate through.
+    const Model = existing.moduleType === 'CNQuestion' ? CNQuestion : Question;
+
+    const updatedQuestion = await Model.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true, runValidators: true }
+    );
+
     res.status(200).json(updatedQuestion);
   } catch (err) {
     res.status(400).json({ error: err.message });
