@@ -23,6 +23,7 @@ const TerminalComponent = ({
   const inputReadyRef = useRef(false);
   const cwdListenerRef = useRef(null);
   const timeoutRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
   const lastSentDataRef = useRef('');
   const sessionEnded = useRef(false);
   const isClosedManuallyRef = useRef(false);
@@ -41,18 +42,14 @@ const TerminalComponent = ({
       const line = buffer.getLine(i);
       if (!line) continue;
 
-      console.log(line);
-
       const text = line.translateToString(true).trim();
       if (text) {
         lastLineText = text;
-        console.log(lastLineText);
         break;
       }
     }
 
     if (!lastLineText) {
-      console.log('[CWD] No non-empty line found in terminal buffer');
       return;
     }
 
@@ -68,7 +65,8 @@ const TerminalComponent = ({
       const resolvedCWD = cwd.replace('~', '/home/labuser');
       setCurrentWorkingDir?.(terminalId, resolvedCWD);
     } else {
-      console.log('[CWD] Prompt-like pattern not found in last line');
+      // Shell startup output is not necessarily a prompt, so there is no
+      // working directory to extract yet. The next prompt will be checked.
     }
   };
 
@@ -81,14 +79,43 @@ const TerminalComponent = ({
       return undefined;
     }
     let retryCount = 0;
+    let disposed = false;
     const maxRetries = 5;
 
+    // Effects can be mounted, cleaned up, and mounted again in development.
+    // Keep reconnect work tied to this specific effect/socket so a closed
+    // predecessor cannot reconnect over the live terminal connection.
+    isClosedManuallyRef.current = false;
+    sessionEnded.current = false;
+
+    const clearReconnectTimer = () => {
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+    };
+
+    const scheduleReconnect = (delay) => {
+      clearReconnectTimer();
+      reconnectTimeoutRef.current = setTimeout(() => {
+        reconnectTimeoutRef.current = null;
+        if (!disposed && !isClosedManuallyRef.current && !sessionEnded.current) {
+          connectWebSocket();
+        }
+      }, delay);
+    };
+
     const connectWebSocket = () => {
+      if (disposed || isClosedManuallyRef.current || sessionEnded.current) return;
       const ws = new WebSocket(wsURL);
       
       wsRef.current = ws;
 
       ws.onopen = () => {
+        if (disposed || wsRef.current !== ws) {
+          ws.close();
+          return;
+        }
         console.log(`[WS] Connected to terminal ${terminalId}`);
         retryCount = 0;
         setTimeout(requestCurrentWorkingDir, 500);
@@ -125,12 +152,9 @@ const TerminalComponent = ({
             // ✅ Detect SSH auth failure
             if (message.includes('All configured authentication methods failed')) {
               xterm.current?.writeln(`\r\n*** Retrying connection in 3 seconds... ***`);
-              onData();
-              setTimeout(() => {
-                if (xterm.current) xterm.current.clear();
-                  retryCount = 0;
-                  connectWebSocket();
-                }, 3000);
+              // Closing lets the single onclose path schedule the retry;
+              // opening another socket here used to leave duplicate shells.
+              ws.close();
               }
             }
         } catch (err) {
@@ -146,21 +170,26 @@ const TerminalComponent = ({
       };
 
       ws.onclose = () => {
-        if (!isClosedManuallyRef.current && retryCount < maxRetries && !sessionEnded.current) {
+        if (disposed || wsRef.current !== ws || isClosedManuallyRef.current) return;
+
+        if (sessionEnded.current) {
+          console.log(`[WS] Terminal session ended for ${terminalId}`);
+          return;
+        }
+
+        if (retryCount < maxRetries) {
           const delay = Math.min(1000 * 2 ** retryCount, 10000);
           console.warn(`[WS] Disconnected from ${terminalId}, retrying in ${delay}ms`);
           if (xterm.current) {
             xterm.current.writeln(`\r\n*** Reconnecting in ${delay / 1000}s... ***`);
           }
           retryCount++;
-          setTimeout(connectWebSocket, delay);
-        } else if (!sessionEnded.current) {
-          if (xterm.current) {
-            xterm.current.writeln("\r\n*** Still waiting for server, retrying anyway... ***");
-          }
-          setTimeout(connectWebSocket, 3000); // ← Force reconnect even after maxRetries
+          scheduleReconnect(delay);
         } else {
-          console.log(`[WS] Gave up retrying for ${terminalId}`);
+          if (xterm.current) {
+            xterm.current.writeln("\r\n*** Still waiting for server; continuing to retry... ***");
+          }
+          scheduleReconnect(3000);
         }
       };
     };
@@ -186,9 +215,14 @@ const TerminalComponent = ({
     window.addEventListener('close-session', onCloseSession);
 
     return () => {
+      disposed = true;
       isClosedManuallyRef.current = true;
+      clearReconnectTimer();
       try { window.removeEventListener('close-session', onCloseSession); } catch (_) {}
-      wsRef.current?.close();
+      if (wsRef.current) {
+        wsRef.current.close();
+        if (wsRef.current.readyState === WebSocket.CLOSED) wsRef.current = null;
+      }
     };
   }, [terminalId, wsURL, onSessionEnd]);
 

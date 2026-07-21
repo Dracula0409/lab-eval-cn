@@ -14,6 +14,62 @@ import {
   TagIcon
 } from '@heroicons/react/24/outline';
 
+// Monaco 0.52 installs a Safari-specific clipboard listener that calls
+// `navigator.clipboard.write()` on every editor click/keypress. In Safari
+// (and in HTTP / embedded lab deployments) that API can be absent, which
+// throws before Monaco can use its normal legacy-copy fallback. Supplying a
+// small standalone clipboard service keeps copy/paste functional where the
+// Clipboard API is available and degrades safely to execCommand elsewhere.
+const clipboardService = (() => {
+  let text = '';
+  let findText = '';
+
+  const legacyCopy = (value) => {
+    const textarea = document.createElement('textarea');
+    textarea.value = value;
+    textarea.setAttribute('aria-hidden', 'true');
+    textarea.style.cssText = 'position:fixed;opacity:0;pointer-events:none;';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      document.execCommand('copy');
+    } finally {
+      textarea.remove();
+    }
+  };
+
+  return {
+    async writeText(value, type) {
+      if (type) return;
+      text = value;
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(value);
+          return;
+        }
+      } catch {
+        // The async Clipboard API is commonly disabled for non-HTTPS lab URLs.
+      }
+      legacyCopy(value);
+    },
+    async readText(type) {
+      if (type) return '';
+      try {
+        if (navigator.clipboard?.readText) return await navigator.clipboard.readText();
+      } catch {
+        // Use the in-memory value when browser permissions reject clipboard reads.
+      }
+      return text;
+    },
+    async writeFindText(value) { findText = value; },
+    async readFindText() { return findText; },
+    async readResources() { return []; },
+    clearInternalState() {},
+  };
+})();
+
+const editorOverrideServices = { clipboardService };
+
 export default function EditorPane({
   language,
   setLanguage,
@@ -213,6 +269,7 @@ export default function EditorPane({
             theme={theme}
             value={activeFile.code}
             options={editorOptions}
+            overrideServices={editorOverrideServices}
             onChange={updateCode}
             onMount={(editor, monaco) => {
               editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {

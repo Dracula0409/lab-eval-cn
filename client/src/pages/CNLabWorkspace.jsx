@@ -16,6 +16,8 @@ import { API_BASE } from '../config';
 // Helper function to get current lab session ID
 const getCurrentLabSession = () => window.__labSessionId || '';
 const LABUSER_HOME = '/home/labuser';
+const getCurrentDateTime = () =>
+  new Date().toISOString();
 
 
 const MobileTabs = ({ activeTab, setActiveTab, tabs }) => (
@@ -735,44 +737,49 @@ export default function CNLabWorkspace() {
 
 
   const addNewFile = () => {
-    if (timeLocked) return;
-    if(!newFileCreated){
+    if (timeLocked || !newFileCreated){
       return;
     }
 
-    const fileName = `${language === 'java' ? 'Main' : 'new_file'}_${fileNo}.${language === 'java' ? 'java' : 'c'}`;
-    
-    const confirmCreate = window.confirm(
-      `📁 This new file will be created in:\n\n  ${currentWorkingDir}\n\nFilename: ${fileName}\n\nIf you'd like to save it elsewhere, please change the directory in your terminal first.\n\nContinue?`
-    );
-
-    if (!confirmCreate) return;
-    setFileNo(fileNo+1);
-
     setNewFileCreated(false);
 
-    const timestamp = Date.now();
-    const newId = `file_${timestamp}`;
-    const className = fileName.replace(/\.java$/, '');
-    const template = language === 'java'
-      ? `// New Java File\n// Author: ${getCurrentUser()}\n// Created: ${getCurrentDateTime()} UTC\n\npublic class ${className} {\n    public static void main(String[] args) {\n        // Write your code here\n    }\n}\n`
-      : `// New C File\n// Author: ${getCurrentUser()}\n// Created: ${getCurrentDateTime()} UTC\n\n#include <stdio.h>\n\nint main() {\n    // Write your code here\n    return 0;\n}\n`;
+    try{
+      const fileName = `${language === 'java' ? 'Main' : 'new_file'}_${fileNo}.${language === 'java' ? 'java' : 'c'}`;
+      
+      const confirmCreate = window.confirm(
+        `📁 This new file will be created in:\n\n  ${currentWorkingDir}\n\nFilename: ${fileName}\n\nIf you'd like to save it elsewhere, please change the directory in your terminal first.\n\nContinue?`
+      );
 
-    setFiles(prevFiles => [
-      ...prevFiles, 
-      {
-        id: newId,
-        name: fileName,
-        path: `${currentWorkingDir}/${fileName}`,
-        code: template,
-        language
-      }
-    ]);
-    dirtyFileIdsRef.current.add(newId);
-    setActiveFileId(newId);
-    setTimeout(() => {
-      setNewFileCreated(true);
-    },1000);
+      if (!confirmCreate) return;
+      setFileNo(prev => prev + 1);
+
+      const timestamp = Date.now();
+      const newId = `file_${timestamp}`;
+      const className = fileName.replace(/\.java$/, '');
+      const template = language === 'java'
+        ? `// New Java File\n// Author: ${getCurrentUser()}\n// Created: ${getCurrentDateTime()} UTC\n\npublic class ${className} {\n    public static void main(String[] args) {\n        // Write your code here\n    }\n}\n`
+        : `// New C File\n// Author: ${getCurrentUser()}\n// Created: ${getCurrentDateTime()} UTC\n\n#include <stdio.h>\n\nint main() {\n    // Write your code here\n    return 0;\n}\n`;
+
+      setFiles(prevFiles => [
+        ...prevFiles, 
+        {
+          id: newId,
+          name: fileName,
+          path: `${currentWorkingDir}/${fileName}`,
+          code: template,
+          language
+        }
+      ]);
+      dirtyFileIdsRef.current.add(newId);
+      setActiveFileId(newId);
+    } catch(err){
+      console.error("Error creating new file:", err);
+      alert("Failed to create new file.");
+    } finally {
+      setTimeout(() => {
+        setNewFileCreated(true);
+      }, 1000);
+    }
   };
 
 
