@@ -10,16 +10,17 @@
 // served from our own build and never depends on reaching a third-party CDN.
 import { loader } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
+import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 
 // Monaco needs web workers for things like tokenization/basic editing
 // features. Wire them up via Vite's native `new URL(..., import.meta.url)`
 // worker syntax so no extra bundler plugin is required.
 self.MonacoEnvironment = {
   getWorker() {
-    return new Worker(
-      new URL('monaco-editor/esm/vs/editor/editor.worker.js', import.meta.url),
-      { type: 'module' }
-    );
+    // Vite owns the final asset URL, including when the app is served under
+    // a path prefix. This avoids a worker request being rewritten to index.html
+    // (the source of the "Unexpected token '<'" error).
+    return new EditorWorker();
   },
 };
 
