@@ -40,9 +40,9 @@ router.get('/read-file', requireAuth, async (req, res) => {
     exec(command, (err, stdout, stderr) => {
       if (err) {
         console.error('[Docker Read Error]', stderr || err.message);
-        return res.status(404).json({ error: stderr || 'File not found' });
+        return res.json({ exists: false, code: null, error: stderr || 'File not found' });
       }
-      res.json({ code: stdout });
+      res.json({ exists: true, code: stdout });
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

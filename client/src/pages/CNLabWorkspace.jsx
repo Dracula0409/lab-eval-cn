@@ -520,9 +520,9 @@ export default function CNLabWorkspace() {
           evalScript: "",
           maxMarks: null,
         }]);
+      } finally {
+        setLoadingQuestions(false);
       }
-      
-      setLoadingQuestions(false);
     };
     
     if (authReady) fetchModuleData();
@@ -669,9 +669,11 @@ export default function CNLabWorkspace() {
               sessionId: getCurrentLabSession(),
             },
           });
-          code = response.data?.code ?? code;
+          if (response.data?.exists) {
+            code = response.data.code ?? code;
+          }
         } catch {
-          // If the student has not created/saved this file yet, use the starter code.
+          // Network/server error — fall back to starter code.
         }
 
         return {
@@ -803,6 +805,11 @@ export default function CNLabWorkspace() {
       const res = await axios.get(`${API_BASE}/api/file/read-file`, {
         params: { filename: selected, cwd: currentWorkingDir, sessionId: getCurrentLabSession() }
       });
+
+      if (!res.data?.exists) {
+        alert(`File "${selected}" could not be found.`);
+        return;
+      }
 
       const code = res.data.code;
       const newId = `file_${Date.now()}`;
@@ -1385,7 +1392,9 @@ export default function CNLabWorkspace() {
             const response = await axios.get(`${API_BASE}/api/file/read-file`, {
               params: { cwd: LABUSER_HOME, filename: f.name, sessionId: getCurrentLabSession() },
             });
-            code = response.data?.code ?? code;
+            if (response.data?.exists) {
+              code = response.data.code ?? code;
+            }
           } catch {
             // Use starter code if no saved file exists for this question.
           }
