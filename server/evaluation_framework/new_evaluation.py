@@ -16,6 +16,18 @@ def print_c(content, status):
     else:
         print("\033[41m  Failed  \033[0m")
 
+def print_ascii(hex_string):
+
+    n = len(hex_string) // 2
+    for i in range(0, n):
+
+        left_nibble = hex_string[i*2]
+        right_nibble= hex_string[i*2+1]
+        char_byte = int(left_nibble, 16) * 16  + int(right_nibble, 16)
+        
+        char_byte = chr(char_byte)
+
+        print(char_byte, end="")
 
 # Validate arguments
 if len(sys.argv) != 4:
@@ -114,9 +126,9 @@ with open("hex_transfer.log") as f:
 def to_hex_variants(data):
     if isinstance(data, str):
         # Old behaviour: treat as UTF-8 string
-        print("original data: ", data)
+        #print("original data: ", data)
         hex_str = data.encode('utf-8').hex()
-        print("Hex data: ", hex_str)
+        #print("Hex data: ", hex_str)
         return (hex_str, hex_str)
     elif isinstance(data, int):
         return (
@@ -206,26 +218,29 @@ for idx, item in enumerate(pairs):
     key, expected_data = next(iter(comm.items()))
     src_logical, dst_logical = key.split("_to_")
     direction = "c->s" if "client" in src_logical else "s->c"
+    matched_pair = False
 
+    try:
+        hex_big, hex_little = to_hex_variants(expected_data)
+    except Exception as e:
+        print(f"Hex conversion failed for data {expected_data}: {e}")
+        continue
+    
     for e_src, e_dst, e_dir, e_data in entries:
         if e_dir == direction and e_src == src_logical and e_dst == dst_logical:
             actual = e_data.lower()
             matched = False
 
             # --------- CASE 1: pattern [0] -> old behaviour (int/float/double/string/etc.) ---------
-            if pattern == [0]:
-                try:
-                    hex_big, hex_little = to_hex_variants(expected_data)
-                except Exception as e:
-                    print(f"Hex conversion failed for data {expected_data}: {e}")
-                    continue
-
+            if pattern == [0]:                
                 if isinstance(expected_data, (int, float, bool)):
                     matched = (actual == hex_big) or (actual == hex_little)
                 elif isinstance(expected_data, str):
                     # Original "string with printable-next-byte" heuristic
-                    #print("testcase data: ", expected_data)
-                    #print("obtained data: ", actual)
+                    print("Expected data: ", expected_data)
+                    print("Obtained data: ", end="")
+                    print_ascii(actual)
+                    print("")
                     if actual.startswith(hex_big):
                         next_index = len(hex_big)
                         if next_index + 2 <= len(actual):
@@ -265,14 +280,17 @@ for idx, item in enumerate(pairs):
             if matched:
                 row[2 + 2*idx + 1] = "correct"
                 print_c(testcase_id, "correct")
+                matched_pair = True
                 break
-            else:
-                print_c(testcase_id, "wrong")
+
+    if not matched :
+        print_c(testcase_id, "wrong")
 
 # ----------- Append to evaluated.csv -----------
 eval_file = f"{student_id}_evaluated.csv"
 
 with open(eval_file, "a", newline="") as f:
+    
     writer = csv.writer(f)
     writer.writerow(row)
 

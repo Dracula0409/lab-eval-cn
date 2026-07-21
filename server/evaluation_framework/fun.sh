@@ -572,7 +572,7 @@ function WAIT_PORT()
 	#=- echo "|	status PORT_AVAIL:{ $s }	|" 
 	if [[ "$s" == "01" || "$s" == "0A" ]];then
 		
-		print ">>> \033[36mTHE PORT:$2 IS ALREADY IN USE\033[0m <<<"
+		printf ">>> \033[36mTHE PORT:$2 IS ALREADY IN USE\033[0m <<<"
 		CLEAR_ALL
 		exit 301
 	elif [[ "$s" == "05" || "$s" == "06" ]];then

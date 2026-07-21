@@ -26,7 +26,8 @@ export default function Header({
   moduleInfo,
   loadingQuestions,
   onLogout,
-  onExitLab
+  onExitLab,
+  studentId
 }) {
   return (
     <header className="bg-white/80 backdrop-blur-lg border-b border-gray-200/50 shadow-lg">
@@ -64,6 +65,11 @@ export default function Header({
             {moduleInfo && (
               <div className="ml-2 flex items-center bg-indigo-50 rounded-full px-3 py-1 text-xs text-indigo-700 border border-indigo-100">
                 <InformationCircleIcon className="w-4 h-4 mr-1" />
+                {!isTeacherPage && studentId && (
+                  <div className="ml-2 flex items-center bg-gray-50 rounded-full px-3 py-1 text-xs text-gray-600 border border-gray-200">
+                    <span className="font-medium">{studentId}</span>
+                  </div>
+                )}
                 <span className="mr-2 font-medium">{moduleInfo.time}</span>
                 <span className="font-medium">{moduleInfo.maxMarks || 'N/A'} Marks</span>
               </div>
@@ -86,6 +92,9 @@ export default function Header({
           </h2>
           {moduleInfo && (
             <div className="text-xs text-gray-500">
+              {!isTeacherPage && studentId && (
+                <div className="text-xs text-gray-400">{studentId}</div>
+              )}
               {moduleInfo.time} · {moduleInfo.maxMarks || 'N/A'} Marks
             </div>
           )}

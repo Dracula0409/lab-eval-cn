@@ -48,7 +48,8 @@ const EvaluationOverlay = ({ overlay, logBoxRef, onClose }) => {
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
 
-    const colorMap = {
+    // Foreground codes (30-37 normal, 90-97 bright)
+    const fgMap = {
       30: '#111827',
       31: '#ff5f56',
       32: '#27c93f',
@@ -67,8 +68,65 @@ const EvaluationOverlay = ({ overlay, logBoxRef, onClose }) => {
       97: '#ffffff',
     };
 
+    // Background codes (40-47 normal, 100-107 bright) — this is what
+    // evaluation.py's print_c() actually uses: \033[42m (green bg) for
+    // "Passed" and \033[41m (red bg) for "Failed". These were previously
+    // missing entirely, so those escapes matched nothing and got silently
+    // dropped, leaving plain white text.
+    const bgMap = {
+      40: '#111827',
+      41: '#ff5f56',
+      42: '#27c93f',
+      43: '#ffbd2e',
+      44: '#5e9cff',
+      45: '#d670d6',
+      46: '#56d4dd',
+      47: '#f8f8f2',
+      100: '#374151',
+      101: '#ff7b72',
+      102: '#7ee787',
+      103: '#f2cc60',
+      104: '#79c0ff',
+      105: '#d2a8ff',
+      106: '#a5f3fc',
+      107: '#ffffff',
+    };
+
+    // Real terminals keep fg/bg/bold/underline as *persistent* state until
+    // explicitly changed or reset — not "reset on every escape sequence",
+    // which is what the previous implementation did. That distinction
+    // matters here because nice.sh/evaluation.py commonly emit a color
+    // escape, some text, then another color escape for the *next* piece
+    // of text without resetting in between (e.g. two consecutive
+    // print_c() calls) — the old logic would drop the first span's style
+    // the moment a second escape appeared, even if that escape only
+    // changed one attribute.
+    let state = { fg: null, bg: null, bold: false, underline: false };
+    let spanOpen = false;
     let html = '';
-    let openSpan = false;
+
+    const isDefault = (s) => !s.fg && !s.bg && !s.bold && !s.underline;
+    const styleFor = (s) => {
+      const styles = [];
+      if (s.fg) styles.push(`color:${s.fg}`);
+      if (s.bg) styles.push(`background-color:${s.bg}`);
+      if (s.bold) styles.push('font-weight:700');
+      if (s.underline) styles.push('text-decoration:underline');
+      return styles.join(';');
+    };
+    const closeSpan = () => {
+      if (spanOpen) {
+        html += '</span>';
+        spanOpen = false;
+      }
+    };
+    const openSpanIfStyled = () => {
+      if (!isDefault(state)) {
+        html += `<span style="${styleFor(state)}">`;
+        spanOpen = true;
+      }
+    };
+
     const parts = escapeHtml(text).split(/(\x1b\[[0-9;]*m)/g);
     for (const part of parts) {
       const match = part.match(/^\x1b\[([0-9;]*)m$/);
@@ -78,20 +136,36 @@ const EvaluationOverlay = ({ overlay, logBoxRef, onClose }) => {
       }
 
       const codes = match[1].split(';').filter(Boolean).map(Number);
-      if (openSpan) {
-        html += '</span>';
-        openSpan = false;
-      }
-      if (codes.length === 0 || codes.includes(0)) continue;
+      const effectiveCodes = codes.length ? codes : [0]; // bare "\x1b[m" == reset
 
-      const color = codes.map((code) => colorMap[code]).find(Boolean);
-      const bold = codes.includes(1);
-      if (color || bold) {
-        html += `<span style="${color ? `color:${color};` : ''}${bold ? 'font-weight:700;' : ''}">`;
-        openSpan = true;
+      closeSpan();
+
+      for (const code of effectiveCodes) {
+        if (code === 0) {
+          state = { fg: null, bg: null, bold: false, underline: false };
+        } else if (code === 1) {
+          state.bold = true;
+        } else if (code === 22) {
+          state.bold = false;
+        } else if (code === 4) {
+          state.underline = true;
+        } else if (code === 24) {
+          state.underline = false;
+        } else if (code === 39) {
+          state.fg = null; // default foreground
+        } else if (code === 49) {
+          state.bg = null; // default background
+        } else if (fgMap[code] !== undefined) {
+          state.fg = fgMap[code];
+        } else if (bgMap[code] !== undefined) {
+          state.bg = bgMap[code];
+        }
       }
+
+      openSpanIfStyled();
     }
-    if (openSpan) html += '</span>';
+
+    closeSpan();
     return html;
   };
 
@@ -201,9 +275,15 @@ const WorkspaceLoading = ({ message = 'Preparing your lab workspace...' }) => (
 // Helper functions
 const getCurrentUser = () => window.__authUser?.user_id || '';
 const getStudentName = () => window.__authUser?.name || getCurrentUser();
-const getCurrentDateTime = () => {
-  const now = new Date();
-  return now.toISOString().slice(0, 19).replace('T', ' ');
+
+// Turns the backend's sessionSlot ("AN"/"FN") or slotKey
+// ("2026-07-13_AN") into the short session label shown in the header,
+// replacing the old raw "10:00 AM - 12:00 PM" time-of-day string.
+const getSessionLabel = (sessionSlot, slotKey) => {
+  const raw = sessionSlot || slotKey || '';
+  if (!raw) return 'Not specified';
+  const suffix = raw.includes('_') ? raw.split('_').pop() : raw;
+  return suffix.toUpperCase();
 };
 
 // Real-time module handling will be implemented with WebSockets
@@ -346,7 +426,7 @@ export default function CNLabWorkspace() {
             name: moduleData.name,
             description: moduleData.description,
             maxMarks: moduleData.maxMarks,
-            time: moduleData.time || "Not specified",
+            time: getSessionLabel(moduleData.assignment?.sessionSlot || moduleData.sessionSlot, moduleData.assignment?.slotKey),
             date: moduleData.date,
             durationMinutes: moduleData.assignment?.durationMinutes || moduleData.durationMinutes || 60,
             slotKey: moduleData.assignment?.slotKey || '',
@@ -954,6 +1034,20 @@ export default function CNLabWorkspace() {
     return () => window.removeEventListener('keydown', blockKeys, true);
   }, [evaluationOverlay.running]);
 
+  // Checks whether `filename` already exists in `dir` inside the student's
+  // container. Returns its content if so, otherwise null. Used before any
+  // rename/language-switch that could otherwise clobber a pre-existing file
+  // via the backend's `mv oldPath newPath`, which overwrites silently.
+  const fetchExistingFileIfPresent = async (dir, filename) => {
+    try {
+      const res = await axios.get(`${API_BASE}/api/file/read-file`, {
+        params: { cwd: dir, filename, sessionId: getCurrentLabSession() },
+      });
+      return typeof res.data?.code === 'string' ? res.data.code : '';
+    } catch {
+      return null; // 404 or any other failure => no conflicting file
+    }
+  };
 
   //handle rename and code language change
   const renameFile = async (fileId, newName) => {
@@ -968,11 +1062,28 @@ export default function CNLabWorkspace() {
     if (!file) return;
 
     const oldPath = file.path;
+    const dir = file.path ? file.path.split('/').slice(0, -1).join('/') : currentWorkingDir;
     const newPath = file.path
       ? file.path.split('/').slice(0, -1).concat(newName).join('/')
       : newName;
 
-    // Update frontend state
+    if (newPath === oldPath) return;
+
+    // A file with this exact name may already exist in the container (e.g.
+    // an earlier server.java from before a reload) — `mv` on the backend
+    // would silently overwrite it. Check first and, if it exists, load it
+    // into the editor instead of destroying it.
+    const existingCode = await fetchExistingFileIfPresent(dir, newName);
+    const fileAlreadyExists = existingCode !== null;
+
+    if (fileAlreadyExists) {
+      const proceed = window.confirm(
+        `"${newName}" already exists in ${dir || currentWorkingDir}.\n\n` +
+        `Renaming here will NOT overwrite it — the existing "${newName}" will be loaded into the editor instead, and your current file will be left as "${file.name}" on disk.\n\nContinue?`
+      );
+      if (!proceed) return;
+    }
+
     setFiles(prevFiles =>
       prevFiles.map(f =>
         f.id === fileId
@@ -980,7 +1091,8 @@ export default function CNLabWorkspace() {
               ...f,
               name: newName,
               path: newPath,
-              language: detectedLanguage
+              language: detectedLanguage,
+              code: fileAlreadyExists ? existingCode : f.code,
             }
           : f
       )
@@ -996,7 +1108,14 @@ export default function CNLabWorkspace() {
 
     setLanguage(detectedLanguage);
 
-    // Notify backend to rename inside container
+    if (fileAlreadyExists) {
+      // Don't touch the container — the old file (oldPath) stays exactly as
+      // it was, and the pre-existing target file is simply now what's shown
+      // in the editor.
+      return;
+    }
+
+    // No conflict — safe to rename inside the container as before.
     try {
       await fetch(`${API_BASE}/api/rename-file`, {
         method: 'POST',
@@ -1023,11 +1142,29 @@ export default function CNLabWorkspace() {
     const baseName = file.name.replace(/\.[^/.]+$/, '');
     const newName = `${baseName}.${newExt}`;
     const oldPath = file.path;
+    const dir = file.path ? file.path.split('/').slice(0, -1).join('/') : currentWorkingDir;
     const newPath = file.path
       ? file.path.split('/').slice(0, -1).concat(newName).join('/')
       : newName;
 
-    // Update frontend state
+    if (newPath === oldPath) return;
+
+    // A file with this exact name may already exist in the container (e.g.
+    // an earlier server.java written before a reload, while server.c is
+    // currently open) — `mv` on the backend would silently overwrite it.
+    // Check first and, if it exists, load it into the editor instead of
+    // destroying it.
+    const existingCode = await fetchExistingFileIfPresent(dir, newName);
+    const fileAlreadyExists = existingCode !== null;
+
+    if (fileAlreadyExists) {
+      const proceed = window.confirm(
+        `"${newName}" already exists in ${dir || currentWorkingDir}.\n\n` +
+        `Switching language here will NOT overwrite it — the existing "${newName}" will be loaded into the editor instead, and your current "${file.name}" will be left untouched on disk.\n\nContinue?`
+      );
+      if (!proceed) return;
+    }
+
     setFiles(prevFiles =>
       prevFiles.map(f =>
         f.id === fileId
@@ -1035,7 +1172,8 @@ export default function CNLabWorkspace() {
               ...f,
               language: newLang,
               name: newName,
-              path: newPath
+              path: newPath,
+              code: fileAlreadyExists ? existingCode : f.code,
             }
           : f
       )
@@ -1049,7 +1187,11 @@ export default function CNLabWorkspace() {
       return next;
     });
 
-    // Notify backend to rename file inside container
+    if (fileAlreadyExists) {
+      return;
+    }
+
+    // No conflict — safe to rename inside the container as before.
     try {
       await fetch(`${API_BASE}/api/rename-file`, {
         method: 'POST',
@@ -1469,6 +1611,7 @@ export default function CNLabWorkspace() {
           timeLimit={isFreeCoding ? null : remainingSeconds}
           totalTimeLimit={isFreeCoding ? null : totalSeconds}
           onExitLab={() => handleExitWorkspace()}
+          studentId={getCurrentUser()}
         />
         <MobileTabs
           activeTab={activeTab}
@@ -1553,6 +1696,7 @@ export default function CNLabWorkspace() {
         moduleInfo={moduleInfo}
         loadingQuestions={loadingQuestions}
         onExitLab={() => handleExitWorkspace()}
+        studentId={getCurrentUser()}
       />
       
       <div className="flex-1 overflow-hidden">
