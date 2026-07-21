@@ -710,8 +710,14 @@ export async function runAndEvaluate({
     onLog?.({ type: 'stage', message: 'Copying student source files' });
 
     const fileArgs = [];
+    // tagPaths keys look like "s1", "s2", "c1", "c2", ... — group filenames
+    // by whether the tag is a server (s*) or client (c*) role so nice.sh
+    // gets them as two separate quoted args:
+    //   bash nice.sh "server1.c server2.c" "client1.c client2.c"
+    const serverFiles = [];
+    const clientFiles = [];
 
-    for (const filePath of Object.values(tagPaths)) {
+    for (const [tag, filePath] of Object.entries(tagPaths)) {
       const fileName = path.posix.basename(filePath);
 
       await execViaConn(
@@ -720,9 +726,18 @@ export async function runAndEvaluate({
       );
 
       fileArgs.push(`"${fileName}"`);
+
+      const role = String(tag).trim().toLowerCase().charAt(0);
+      if (role === 's') {
+        serverFiles.push(fileName);
+      } else if (role === 'c') {
+        clientFiles.push(fileName);
+      }
     }
 
     const args = fileArgs.join(' ');
+    const serverArgs = `"${serverFiles.join(' ')}"`;
+    const clientArgs = `"${clientFiles.join(' ')}"`;
 
     console.log("F chmod");
     await execViaConn(conn, `chmod +x ${EVAL_DIR}/nice.sh`, onLog);
@@ -731,7 +746,7 @@ export async function runAndEvaluate({
     onLog?.({ type: 'stage', message: 'Running nice.sh' });
     const { stdout, stderr, exitCode } = await execViaConn(
       conn,
-      `cd ${EVAL_DIR} && bash nice.sh ${args}; echo "__DONE__"; exit`,
+      `cd ${EVAL_DIR} && bash nice.sh ${serverArgs} ${clientArgs}; echo "__DONE__"; exit`,
       onLog
     );
 
