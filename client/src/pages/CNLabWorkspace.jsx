@@ -12,6 +12,7 @@ import { useIsMobile } from '../components/utils/useIsMobile';
 import { summarizeResults } from '../components/utils/testcaseHelper';
 import { InformationCircleIcon } from '@heroicons/react/24/outline';
 import { API_BASE } from '../config';
+import StudentConnectionHeartbeat from '../components/StudentConnectionHeartbeat';
 
 // Helper function to get current lab session ID
 const getCurrentLabSession = () => window.__labSessionId || '';
@@ -1607,6 +1608,7 @@ export default function CNLabWorkspace() {
   if (isMobile) {
     return (
       <div className="flex flex-col h-screen bg-gray-50">
+        <StudentConnectionHeartbeat />
         <EvaluationOverlay
           overlay={evaluationOverlay}
           logBoxRef={logBoxRef}
@@ -1688,6 +1690,7 @@ export default function CNLabWorkspace() {
   // Desktop layout
   return (
     <div className="flex flex-col h-screen bg-white">
+      <StudentConnectionHeartbeat />
       <EvaluationOverlay
         overlay={evaluationOverlay}
         logBoxRef={logBoxRef}

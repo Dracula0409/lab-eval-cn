@@ -159,6 +159,10 @@ NODE_ENV=production
 MONGO_URI=mongodb://127.0.0.1:27017/lab_eval_cn
 JWT_SECRET=<generate a long random string, e.g. `openssl rand -hex 32`>
 
+# Set to true only when Node is behind exactly one trusted reverse proxy
+# (for example, Nginx). This lets connection enforcement use the real client IP.
+TRUST_PROXY=false
+
 # Docker / per-student containers
 SSH_IMAGE=lab-cn-image
 SSH_PORT_RANGE_START=2200
@@ -171,6 +175,10 @@ CONTAINER_PIDS_LIMIT=150
 ```
 
 Never commit `.env` (it's already gitignored) and never reuse a `JWT_SECRET` from a dev/test environment.
+
+When Nginx is reverse-proxying requests to Node, set `TRUST_PROXY=true`; leave it
+`false` for direct LAN access to port 5001. This prevents clients from spoofing
+their source IP through `X-Forwarded-For`.
 
 ### 4c. Fix the CORS allow-list for your real domain/IP
 

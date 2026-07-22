@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import axios from 'axios';
 import { API_BASE } from '../config';
+import { getStudentDeviceId } from '../components/StudentConnectionHeartbeat';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -11,6 +12,8 @@ export default function Login() {
   const [resetApproved, setResetApproved] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [connectionBlocked, setConnectionBlocked] = useState(false);
+  const [disconnectRequestLoading, setDisconnectRequestLoading] = useState(false);
 
   const validateNewPassword = (value) => {
     if (value.length < 8) return 'Password must be at least 8 characters long.';
@@ -21,6 +24,7 @@ export default function Login() {
   const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
+    setConnectionBlocked(false);
 
     const trimmedId = studentId.trim();
 
@@ -34,14 +38,36 @@ export default function Login() {
       const loginRes = await axios.post(`${API_BASE}/api/auth/student-login`, {
         userId: trimmedId,
         password,
-      });
+      }, { headers: { 'X-CNLab-Device-Id': getStudentDeviceId() } });
       const student = loginRes.data.student;
 
       navigate('/student-dashboard');
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to login. Is the server running?');
+      if (err.response?.status === 409) {
+        setConnectionBlocked(true);
+        setError('This account is already active on another machine or network. Please log out there, wait for the session to expire, or ask your teacher to disconnect it.');
+      } else {
+        setError(err.response?.data?.error || 'Failed to login. Is the server running?');
+      }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const requestSessionDisconnect = async () => {
+    if (!studentId.trim() || !password) {
+      setError('Enter your student ID and password before requesting a session disconnect.');
+      return;
+    }
+    setDisconnectRequestLoading(true);
+    try {
+      await axios.post(`${API_BASE}/api/auth/session-disconnect-request`, { userId: studentId.trim(), password });
+      setError('Disconnect request sent to your teacher. Once approved, sign in again.');
+      setConnectionBlocked(false);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Could not send the disconnect request.');
+    } finally {
+      setDisconnectRequestLoading(false);
     }
   };
 
@@ -133,6 +159,17 @@ export default function Login() {
             <div className="rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2">
               {error}
             </div>
+          )}
+
+          {connectionBlocked && (
+            <button
+              type="button"
+              onClick={requestSessionDisconnect}
+              disabled={disconnectRequestLoading}
+              className="w-full py-2 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 text-sm font-semibold hover:bg-amber-100 disabled:opacity-50"
+            >
+              {disconnectRequestLoading ? 'Sending request…' : 'Request teacher to disconnect active session'}
+            </button>
           )}
 
           <button

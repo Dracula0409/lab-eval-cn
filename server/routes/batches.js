@@ -2,6 +2,9 @@ import express from 'express';
 import Batch from '../models/Batch.js';
 import User from '../models/User.js';
 import PasswordResetRequest from '../models/PasswordResetRequest.js';
+import SessionDisconnectRequest from '../models/SessionDisconnectRequest.js';
+import StudentConnection from '../models/StudentConnection.js';
+import { revokeStudentConnection } from '../utils/studentConnections.js';
 import { authorize, requireAuth } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -198,6 +201,42 @@ router.patch('/password-reset-requests/:id', async (req, res) => {
     res.json({ success: true, request });
   } catch (err) {
     console.error('[batches] password reset update error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/session-disconnect-requests', async (req, res) => {
+  try {
+    const requests = await SessionDisconnectRequest.find({ status: 'pending' }).sort({ createdAt: -1 }).lean();
+    res.json(requests);
+  } catch (err) {
+    console.error('[batches] session disconnect list error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/session-disconnect-requests/:id', async (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status.' });
+    const request = await SessionDisconnectRequest.findOneAndUpdate(
+      { _id: req.params.id, status: 'pending' },
+      { $set: { status, approvedAt: status === 'approved' ? new Date() : null } },
+      { new: true }
+    );
+    if (!request) return res.status(404).json({ error: 'Pending request not found.' });
+
+    if (status === 'approved') {
+      const connections = await StudentConnection.find({ userId: request.userId, revokedAt: null });
+      const { closeStudentSocketsForConnection } = await import('../controllers/sshController.js');
+      await Promise.all(connections.map(async (connection) => {
+        await revokeStudentConnection(connection.sessionId, 'disconnected after teacher approval');
+        closeStudentSocketsForConnection(connection.sessionId);
+      }));
+    }
+    res.json({ success: true, request });
+  } catch (err) {
+    console.error('[batches] session disconnect update error:', err);
     res.status(500).json({ error: err.message });
   }
 });

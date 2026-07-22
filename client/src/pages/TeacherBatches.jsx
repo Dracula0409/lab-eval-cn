@@ -9,6 +9,7 @@ export default function TeacherBatches() {
   const [batches, setBatches] = useState([]);
   const [students, setStudents] = useState([]);
   const [requests, setRequests] = useState([]);
+  const [disconnectRequests, setDisconnectRequests] = useState([]);
   const [form, setForm] = useState({ name: '', defaultPassword: '', studentIds: '' });
   const [editingStudentId, setEditingStudentId] = useState(null);
   const [studentDraft, setStudentDraft] = useState({ name: '', batch: '', password: '' });
@@ -33,14 +34,16 @@ export default function TeacherBatches() {
   };
 
   const loadData = async () => {
-    const [batchRes, studentRes, requestRes] = await Promise.all([
+    const [batchRes, studentRes, requestRes, disconnectRequestRes] = await Promise.all([
       axios.get(`${API_BASE}/api/batches`),
       axios.get(`${API_BASE}/api/batches/students`),
       axios.get(`${API_BASE}/api/batches/password-reset-requests`),
+      axios.get(`${API_BASE}/api/batches/session-disconnect-requests`),
     ]);
     setBatches(batchRes.data || []);
     setStudents(studentRes.data || []);
     setRequests(requestRes.data || []);
+    setDisconnectRequests(disconnectRequestRes.data || []);
   };
 
   useEffect(() => {
@@ -66,6 +69,16 @@ export default function TeacherBatches() {
   const updateRequest = async (id, status) => {
     await axios.patch(`${API_BASE}/api/batches/password-reset-requests/${id}`, { status });
     await loadData();
+  };
+
+  const updateDisconnectRequest = async (id, status) => {
+    try {
+      await axios.patch(`${API_BASE}/api/batches/session-disconnect-requests/${id}`, { status });
+      setMessage(status === 'approved' ? 'Student sessions disconnected.' : 'Disconnect request rejected.');
+      await loadData();
+    } catch (err) {
+      setMessage(err.response?.data?.error || 'Could not update disconnect request.');
+    }
   };
 
   const startEditStudent = (student) => {
@@ -154,6 +167,23 @@ export default function TeacherBatches() {
           </form>
 
           <div className="lg:col-span-2 space-y-6">
+            <div className="bg-white border border-amber-200 rounded-lg p-5 shadow-sm">
+              <h2 className="text-base font-semibold text-gray-900 mb-1">Session Disconnect Requests</h2>
+              <p className="text-xs text-gray-500 mb-3">Approve only after confirming the student needs their previous login ended.</p>
+              {disconnectRequests.length === 0 ? (
+                <p className="text-sm text-gray-500">No pending requests.</p>
+              ) : (
+                <div className="divide-y">
+                  {disconnectRequests.map((r) => (
+                    <div key={r._id} className="py-3 flex items-center justify-between gap-3">
+                      <div className="text-sm"><p className="font-medium text-gray-900">{r.studentName || r.userId}</p><p className="text-gray-500">{r.userId} · Batch {r.batch || '-'}</p></div>
+                      <div className="flex gap-2"><button onClick={() => updateDisconnectRequest(r._id, 'approved')} className="px-3 py-1.5 rounded-md bg-amber-600 text-white text-sm">Disconnect</button><button onClick={() => updateDisconnectRequest(r._id, 'rejected')} className="px-3 py-1.5 rounded-md bg-gray-200 text-gray-700 text-sm">Reject</button></div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <div className="bg-white border border-gray-200 rounded-lg p-5 shadow-sm">
               <h2 className="text-base font-semibold text-gray-900 mb-3">Password Reset Requests</h2>
               {requests.length === 0 ? (

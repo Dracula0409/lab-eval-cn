@@ -28,30 +28,54 @@ export function pickBestRun(runsForPair = []) {
 }
 
 /** Flatten a run's communicationResults into a simple ['Correct'|'Wrong', ...] list. */
-export function flattenTcVerdicts(run) {
-  const out = [];
-  for (const tc of run?.communicationResults || []) {
-    for (const p of tc.pairs || []) {
-      out.push(p.verdict === 'correct' ? 'Correct' : 'Wrong');
-    }
-  }
-  return out;
+/** Group a run's communicationResults per testcase: [{ verdicts: [...] }, ...] */
+export function getTcGroups(run) {
+  return (run?.communicationResults || []).map((tc) => ({
+    verdicts: (tc.pairs || []).map((p) => (p.verdict === 'correct' ? 'Correct' : 'Wrong')),
+  }));
 }
 
-/** Raw persistence descriptor from status.csv (column index 2), if present. */
+/** Back-compat flat list (all pairs across all testcases, in order). */
+export function flattenTcVerdicts(run) {
+  return getTcGroups(run).flatMap((g) => g.verdicts);
+}
+
+/**
+ * Persistence: the raw 'persistent'/'non-persistent' descriptor when the
+ * check passed; 'Wrong' if it failed (descriptor doesn't matter once wrong);
+ * '' if nothing to report.
+ */
 export function getPersistence(run) {
   const rows = run?.statusResults || [];
   if (!rows.length) return '';
-  return rows[0]?.cols?.[2] ?? '';
+  if (rows.some((r) => !r.passed)) return 'Wrong';
+  const descriptors = [...new Set(rows.map((r) => r.descriptor).filter(Boolean))];
+  return descriptors.join('/');
 }
 
-/** { Listen, Established, Closed } -> 'Correct' | 'Wrong' | '' */
+/**
+ * { Listen, Established, Closed } -> 'Correct' | 'Wrong' | ''
+ * 'listen'/'established' rows determine Listen/Established; 'no' rows
+ * (from a server or client entity) determine Closed. Any wrong row makes
+ * the field Wrong; else Correct if at least one row was seen; else blank.
+ */
 export function getConnVerdicts(run) {
   const rows = run?.connResults || [];
+  const buckets = { Listen: [], Established: [], Closed: [] };
+
+  for (const row of rows) {
+    const check = (row.check ?? row.peer ?? '').toLowerCase();
+    const isPass = row.passed ?? row.verdict === 'correct';
+    if (check === 'listen') buckets.Listen.push(isPass);
+    else if (check === 'established') buckets.Established.push(isPass);
+    else if (check === 'no') buckets.Closed.push(isPass);
+  }
+
   const out = {};
-  CONN_LABELS.forEach((label, i) => {
-    out[label] = rows[i] ? (rows[i].passed ? 'Correct' : 'Wrong') : '';
-  });
+  for (const label of CONN_LABELS) {
+    const seen = buckets[label];
+    out[label] = seen.length === 0 ? '' : seen.every(Boolean) ? 'Correct' : 'Wrong';
+  }
   return out;
 }
 
@@ -69,6 +93,7 @@ export function buildQuestionReport(question, run) {
     attempted: !!run,
     runType: run?.runType || null,
     submittedAt: run?.createdAt || null,
+    tcGroups: getTcGroups(run),
     tcVerdicts: flattenTcVerdicts(run),
     persistence: getPersistence(run),
     ...conn, // Listen / Established / Closed

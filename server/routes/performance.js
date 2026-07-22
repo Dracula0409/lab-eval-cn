@@ -10,6 +10,7 @@ import {
   pickBestRun,
   buildQuestionReport,
   csvEscape,
+  getTcGroups,
 } from '../utils/performanceHelper.js';
 
 const router = express.Router();
@@ -254,27 +255,28 @@ router.get('/class-csv', async (req, res) => {
       pickBestRun(runsByPair.get(`${userId}|${questionId}`) || []);
 
     // Determine how many TC columns each question needs (max across the class).
-    const maxTcByQuestion = {};
+    // Per question: how many testcases, and how many connection pairs each
+    // testcase needs (max across the class) -> TC1,TC1,TC1,TC1,TC1,TC2,TC2,TC2
+    const tcLayoutByQuestion = {};
     for (const q of questions) {
       const qid = q._id.toString();
-      let max = 0;
+      const pairCounts = [];
       for (const s of students) {
         const run = getRun(s.user_id, qid);
-        const count = (run?.communicationResults || []).reduce(
-          (sum, tc) => sum + (tc.pairs?.length || 0),
-          0
-        );
-        if (count > max) max = count;
+        getTcGroups(run).forEach((g, i) => {
+          pairCounts[i] = Math.max(pairCounts[i] || 0, g.verdicts.length);
+        });
       }
-      maxTcByQuestion[qid] = max || 1;
+      tcLayoutByQuestion[qid] = pairCounts.length ? pairCounts : [1];
     }
 
-    // Header row
     const header = ['Roll No'];
     for (const q of questions) {
-      const n = maxTcByQuestion[q._id.toString()];
+      const layout = tcLayoutByQuestion[q._id.toString()];
       header.push('Question');
-      for (let i = 1; i <= n; i++) header.push(`TC${i}`);
+      layout.forEach((pairCount, i) => {
+        for (let j = 0; j < (pairCount || 1); j++) header.push(`TC${i + 1}`);
+      });
       header.push('Persistence', 'Listen', 'Established', 'Closed');
     }
 
@@ -284,14 +286,15 @@ router.get('/class-csv', async (req, res) => {
       const row = [s.roll_number || s.user_id];
       for (const q of questions) {
         const qid = q._id.toString();
-        const n = maxTcByQuestion[qid];
+        const layout = tcLayoutByQuestion[qid];
         const run = getRun(s.user_id, qid);
         const report = buildQuestionReport(q, run);
 
         row.push(report.attempted ? report.questionKey : '');
-        for (let i = 0; i < n; i++) {
-          row.push(report.tcVerdicts[i] ?? '');
-        }
+        layout.forEach((pairCount, i) => {
+          const verdicts = report.tcGroups[i]?.verdicts || [];
+          for (let j = 0; j < (pairCount || 1); j++) row.push(verdicts[j] ?? '');
+        });
         row.push(report.persistence ?? '');
         row.push(report.Listen ?? '');
         row.push(report.Established ?? '');
