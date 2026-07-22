@@ -17,10 +17,14 @@ connectDB();
 const app = express();
 const server = http.createServer(app);
 
+// Only honour X-Forwarded-For when the deployment is explicitly configured
+// behind one trusted reverse proxy. Otherwise that header is client-spoofable.
+app.set('trust proxy', process.env.TRUST_PROXY === 'true' ? 1 : false);
+
 // Middlewares
 const allowedOrigins = [
   "http://localhost:5173", 
-  "http://10.16.16.104:5173",
+  "http://10.16.16.107:5173",
   "http://10.5.1.4:5173",
   "http://192.168.137.131:5173",
   "http://10.5.1.122:5173",

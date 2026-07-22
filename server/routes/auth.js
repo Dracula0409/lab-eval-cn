@@ -1,7 +1,10 @@
 import express from 'express';
 import User from '../models/User.js';
 import PasswordResetRequest from '../models/PasswordResetRequest.js';
-import { clearAuthCookie, getUserFromRequest, requireAuth, setAuthCookie, signUserToken } from '../middleware/auth.js';
+import { authorize, clearAuthCookie, getUserFromRequest, requireAuth, setAuthCookie, signUserToken } from '../middleware/auth.js';
+import StudentConnection from '../models/StudentConnection.js';
+import SessionDisconnectRequest from '../models/SessionDisconnectRequest.js';
+import { activeConnectionFilter, createStudentConnection, revokeStudentConnection } from '../utils/studentConnections.js';
 
 const router = express.Router();
 
@@ -93,7 +96,8 @@ router.post('/student-login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid student ID or password.' });
     }
 
-    setAuthCookie(res, signUserToken(student), 'student');
+    const connection = await createStudentConnection(req, student);
+    setAuthCookie(res, signUserToken(student, connection.sessionId), 'student');
     res.json({
       success: true,
       student: {
@@ -106,7 +110,7 @@ router.post('/student-login', async (req, res) => {
     });
   } catch (err) {
     console.error('[auth] student-login error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -123,9 +127,83 @@ router.get('/me', requireAuth, (req, res) => {
   });
 });
 
-router.post('/logout', (req, res) => {
-  clearAuthCookie(res, req.body?.role || req.query?.role || 'all');
+router.post('/logout', async (req, res) => {
+  const role = req.body?.role || req.query?.role || 'all';
+  if (role === 'student' || role === 'all') {
+    try {
+      const user = await getUserFromRequest(req).catch(() => null);
+      if (user?.role === 'student' && req.studentConnection?.sessionId) {
+        await revokeStudentConnection(req.studentConnection.sessionId, 'student logged out');
+      }
+    } catch (_) {
+      // Clearing the browser cookie is still useful when the connection has
+      // already expired or was revoked by a teacher.
+    }
+  }
+  clearAuthCookie(res, role);
   res.json({ success: true });
+});
+
+router.post('/heartbeat', requireAuth, (req, res) => {
+  if (req.user.role !== 'student') return res.status(403).json({ error: 'Student session required.' });
+  res.json({ success: true, expiresAt: req.studentConnection.expiresAt });
+});
+
+// This endpoint checks the password again so somebody cannot use a roll number
+// alone to make a teacher disconnect another student's session.
+router.post('/session-disconnect-request', async (req, res) => {
+  try {
+    const { userId, password } = req.body;
+    if (!userId || !password) return res.status(400).json({ error: 'Student ID and password are required.' });
+    const student = await User.findOne({
+      role: 'student',
+      $or: [{ user_id: userId.trim() }, { roll_number: userId.trim() }],
+    });
+    if (!student || student.password !== password) return res.status(401).json({ error: 'Invalid student ID or password.' });
+
+    const request = await SessionDisconnectRequest.findOneAndUpdate(
+      { userId: student.user_id },
+      { $set: { studentName: student.name, batch: student.batch || '', status: 'pending', approvedAt: null } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    res.json({ success: true, request });
+  } catch (err) {
+    console.error('[auth] session disconnect request error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/active-students', requireAuth, authorize('faculty', 'admin'), async (req, res) => {
+  try {
+    const connections = await StudentConnection.find({ revokedAt: null, expiresAt: { $gt: new Date() } })
+      .populate('user', 'name batch roll_number').sort({ lastSeenAt: -1 }).lean();
+    const students = connections.map((connection) => ({
+      connectionId: connection.sessionId,
+      userId: connection.userId,
+      name: connection.user?.name || connection.userId,
+      batch: connection.user?.batch || '',
+      ipAddress: connection.ipAddress,
+      userAgent: connection.userAgent,
+      connectedAt: connection.createdAt,
+      lastSeenAt: connection.lastSeenAt,
+      expiresAt: connection.expiresAt,
+    }));
+    res.json({ students });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/active-students/:sessionId/disconnect', requireAuth, authorize('faculty', 'admin'), async (req, res) => {
+  try {
+    const connection = await revokeStudentConnection(req.params.sessionId, 'disconnected by teacher');
+    if (!connection) return res.status(404).json({ error: 'Active student connection not found.' });
+    const { closeStudentSocketsForConnection } = await import('../controllers/sshController.js');
+    closeStudentSocketsForConnection(connection.sessionId);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.post('/change-password', async (req, res) => {

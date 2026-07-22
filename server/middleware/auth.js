@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
+import { touchStudentConnection } from '../utils/studentConnections.js';
 
 export const STUDENT_JWT_COOKIE_NAME = 'cnlab_student_token';
 export const TEACHER_JWT_COOKIE_NAME = 'cnlab_teacher_token';
@@ -22,12 +23,13 @@ export function getCookie(req, name) {
   return cookies[name];
 }
 
-export function signUserToken(user) {
+export function signUserToken(user, sessionId = null) {
   return jwt.sign(
     {
       id: user._id.toString(),
       user_id: user.user_id,
       role: user.role,
+      sid: sessionId,
     },
     JWT_SECRET,
     { expiresIn: '8h' }
@@ -103,7 +105,17 @@ export async function getUserFromRequest(req, preferredRoles = []) {
   if (!token) return null;
 
   const decoded = jwt.verify(token, JWT_SECRET);
-  return User.findById(decoded.id);
+  const user = await User.findById(decoded.id);
+  if (!user) return null;
+  if (user.role === 'student') {
+    // Older tokens intentionally cease to work after this rollout: without a
+    // server-side session id they cannot be forcefully revoked.
+    if (!decoded.sid) return null;
+    const connection = await touchStudentConnection(decoded.sid);
+    if (!connection || connection.userId !== user.user_id) return null;
+    req.studentConnection = connection;
+  }
+  return user;
 }
 
 export const protect = async (req, res, next) => {

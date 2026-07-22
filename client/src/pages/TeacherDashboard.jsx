@@ -56,6 +56,14 @@ const actions = [
     color: 'from-violet-500 to-fuchsia-600',
   },
   {
+    key: 'active-students',
+    title: 'Active Students',
+    description: 'Monitor active student connections and disconnect suspicious or stuck sessions.',
+    icon: UsersIcon,
+    to: '/teacher-active-students',
+    color: 'from-rose-500 to-red-600',
+  },
+  {
     key: 'student-performances',
     title: 'Student Performances',
     description: 'Look up an individual student, or download a class-wide CSV report.',

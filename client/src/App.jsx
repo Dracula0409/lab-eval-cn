@@ -8,6 +8,7 @@ import TeacherDocker from './pages/TeacherDocker';
 import TeacherBatches from './pages/TeacherBatches';
 import StudentDashboard from './pages/StudentDashboard';
 import TeacherTimeControl from './pages/TeacherTimeControl';
+import TeacherActiveStudents from './pages/TeacherActiveStudents';
 import Home from './pages/Home';
 import Login from './pages/Login';
 import './App.css';
@@ -30,6 +31,7 @@ function App() {
             <Route path="/teacher-docker" element={<TeacherDocker />} />
             <Route path="/teacher-batches" element={<TeacherBatches />} />
             <Route path="/teacher-time" element={<TeacherTimeControl />} />
+            <Route path="/teacher-active-students" element={<TeacherActiveStudents />} />
           </Routes>
         </div>
       </div>

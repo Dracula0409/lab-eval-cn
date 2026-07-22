@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import Header from '../components/Header';
 import { API_BASE } from '../config';
+import StudentConnectionHeartbeat from '../components/StudentConnectionHeartbeat';
 
 export default function StudentDashboard() {
   const navigate = useNavigate();
@@ -97,6 +98,7 @@ export default function StudentDashboard() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      <StudentConnectionHeartbeat />
       <Header title="Student Dashboard" onLogout={logout} />
       <div className="container mx-auto py-8 px-4">
         <div className="max-w-4xl mx-auto space-y-6">

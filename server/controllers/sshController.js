@@ -33,6 +33,18 @@ const __dirname = path.dirname(__filename);
 
 const sessions = {}; // session socket key => { conn, stream, ws, userId, sessionId, terminalId }
 
+// Teacher-driven revocation must also terminate an already-open terminal;
+// otherwise an interactive shell could remain usable until the tab reloads.
+export function closeStudentSocketsForConnection(connectionId) {
+  Object.entries(sessions).forEach(([socketKey, session]) => {
+    if (session.connectionId !== connectionId) return;
+    try { session.ws.close(4001, 'Session disconnected by teacher'); } catch (_) {}
+    try { session.stream?.end(); } catch (_) {}
+    try { session.conn?.end(); } catch (_) {}
+    delete sessions[socketKey];
+  });
+}
+
 function isChannelOpenFailure(err) {
   return err?.reason === 2 || /Channel open failure|open failed/i.test(err?.message || '');
 }
@@ -166,6 +178,7 @@ export function initSSHWebSocket(server) {
         return;
       }
       const userId = user.user_id;
+      const connectionId = request.studentConnection?.sessionId;
       const { sshPort, sessionId } = await ensureSessionContainer(userId, requestedSessionId);
 
       let conn;
@@ -213,7 +226,7 @@ export function initSSHWebSocket(server) {
               }
             });
           const socketKey = `${userId}:${sessionId}:${terminalId}`;
-          sessions[socketKey] = { conn, stream, ws, userId, sessionId, terminalId };
+          sessions[socketKey] = { conn, stream, ws, userId, sessionId, terminalId, connectionId };
 
           // Handle incoming data from SSH
           stream.on('data', (data) => {

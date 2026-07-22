@@ -73,10 +73,11 @@ export function parseConnCsv(csvContent) {
       const cols = line.split(",").map((c) => c.trim());
       return {
         entity: cols[0] || "",
-        peer: cols[1] || "",
-        state: cols[2] || "",
-        verdict: cols[3] || "wrong",
-        passed: cols[3] === "correct",
+        check: cols[1] || "",        // 'listen' | 'established' | 'no'
+        peer: cols[1] || "",          // back-compat alias
+        verdict: cols[2] || "wrong",
+        state: cols[2] || "wrong",    // back-compat alias
+        passed: cols[2] === "correct",
       };
     });
 }
@@ -96,7 +97,11 @@ export function parseStatusCsv(csvContent) {
       return {
         raw: line,
         cols,
-        passed: cols.some((c) => c === "correct" || c === "ok"),
+        src: cols[0] || "",
+        dst: cols[1] || "",
+        descriptor: cols[2] || "",     // 'persistent' | 'non-persistent'
+        verdict: cols[3] || "wrong",
+        passed: cols[3] === "correct",
       };
     });
 }
