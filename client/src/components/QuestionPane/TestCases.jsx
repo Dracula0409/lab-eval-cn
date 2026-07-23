@@ -2,6 +2,23 @@ import { useState } from 'react';
 import { PlayIcon, CheckCircleIcon, XCircleIcon } from '@heroicons/react/24/outline';
 import { parseJsonTestcase, formatTestcaseName } from '../utils/testcaseHelper';
 
+function decodeIfHex(value) {
+  if (typeof value !== 'string') return value;
+  const match = value.match(/^0x([0-9a-fA-F]+)$/);
+  if (!match) return value;
+  const hex = match[1];
+  if (hex.length % 2 !== 0) return value; // malformed, bail out safely
+  try {
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < hex.length; i += 2) {
+      bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+    }
+    return new TextDecoder('utf-8').decode(bytes);
+  } catch {
+    return value; // fall back to raw hex if decoding fails
+  }
+}
+
 export default function TestCases({
   testCases = [],
   testCaseResults = [],
@@ -150,14 +167,19 @@ export default function TestCases({
             {isExpanded && (
               <div className="p-4 border-t space-y-3">
                 {(testCase.friendlySteps || []).length > 0 ? (
-                  (testCase.friendlySteps || []).map((step, si) => (
-                    <div key={si} className="text-sm bg-gray-50 rounded p-3 font-mono">
-                      <span className="font-semibold text-indigo-700">{step.label}:</span>{' '}
-                      <span className="text-gray-800">
-                        {typeof step.value === 'string' ? step.value : JSON.stringify(step.value)}
-                      </span>
-                    </div>
-                  ))
+                  (testCase.friendlySteps || []).map((step, si) => {
+                    const decodedValue = decodeIfHex(step.value);
+                    return (
+                      <div key={si} className="text-sm bg-gray-50 rounded p-3 font-mono">
+                        <span className="font-semibold text-indigo-700">{step.label}:</span>{' '}
+                        <span className="text-gray-800 whitespace-pre-wrap">
+                          {typeof decodedValue === 'string'
+                            ? decodedValue
+                            : JSON.stringify(decodedValue)}
+                        </span>
+                      </div>
+                    );
+                  })
                 ) : (
                   <p className="text-sm text-gray-500 italic">No steps defined.</p>
                 )}

@@ -74,7 +74,7 @@ const actions = [
   {
     key: 'docker-manager',
     title: 'Docker Manager',
-    description: 'Clean up old/unused student containers. (Coming soon)',
+    description: 'Clean up old/unused student containers.',
     icon: CubeIcon,
     to: '/teacher-docker',
     color: 'from-slate-500 to-gray-700',
