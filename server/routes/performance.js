@@ -11,6 +11,7 @@ import {
   buildQuestionReport,
   csvEscape,
   getTcGroups,
+  isFullyCorrect,
 } from '../utils/performanceHelper.js';
 
 const router = express.Router();
@@ -130,6 +131,59 @@ router.get('/student/:userId', async (req, res) => {
   }
 });
 
+/**
+ * Turns the per-student `rows` (each with a `questions` array from
+ * buildQuestionReport) into the numbers the "session status" boxes on the
+ * teacher's Student Performances page need: how many students have
+ * attempted/fully-solved 0, 1, 2, ... N questions, plus a per-question
+ * breakdown for spotting which question is tripping the class up.
+ */
+function summarizeClassReport(questions, rows) {
+  const totalStudents = rows.length;
+  const totalQuestions = questions.length;
+
+  const completionDistribution = new Array(totalQuestions + 1).fill(0);
+  const attemptedDistribution = new Array(totalQuestions + 1).fill(0);
+
+  const perQuestion = questions.map((q) => ({
+    questionId: q._id.toString(),
+    questionKey: q.questionKey || q.title || 'Question',
+    attemptedCount: 0,
+    correctCount: 0,
+  }));
+  const perQuestionIndex = new Map(perQuestion.map((q, i) => [q.questionId, i]));
+
+  for (const row of rows) {
+    let attemptedCount = 0;
+    let correctCount = 0;
+
+    for (const q of row.questions) {
+      const idx = perQuestionIndex.get(q.questionId);
+      if (q.attempted) {
+        attemptedCount += 1;
+        if (idx !== undefined) perQuestion[idx].attemptedCount += 1;
+      }
+      if (isFullyCorrect(q)) {
+        correctCount += 1;
+        if (idx !== undefined) perQuestion[idx].correctCount += 1;
+      }
+    }
+
+    completionDistribution[correctCount] += 1;
+    attemptedDistribution[attemptedCount] += 1;
+  }
+
+  return {
+    totalStudents,
+    totalQuestions,
+    studentsNotStarted: attemptedDistribution[0] || 0,
+    studentsCompletedAll: totalQuestions > 0 ? (completionDistribution[totalQuestions] || 0) : 0,
+    completionDistribution, // index i -> # students who fully solved exactly i questions
+    attemptedDistribution,  // index i -> # students who attempted exactly i questions
+    perQuestion,
+  };
+}
+
 router.get('/class-report', async (req, res) => {
   try {
     const { batch, moduleId, slot, search } = req.query;
@@ -182,11 +236,14 @@ router.get('/class-report', async (req, res) => {
       }),
     }));
 
+    const summary = summarizeClassReport(questions, rows);
+
     res.json({
       batch,
       slot: slot || null,
       module: { _id: module._id, name: module.name },
       rows,
+      summary,
     });
   } catch (err) {
     console.error('[performance] class report error:', err);
