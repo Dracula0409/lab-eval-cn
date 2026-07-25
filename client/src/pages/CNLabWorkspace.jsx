@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Panel, PanelGroup } from 'react-resizable-panels';
 import axios from 'axios';
@@ -1577,14 +1577,44 @@ export default function CNLabWorkspace() {
 
   //handle resize for terminal open and close
   useEffect(() => {
-    if (panelRef.current) {
-      if (showTerminal) {
+    if (!panelRef.current) return;
+    if (showTerminal) {
+      // Only force the default open size if the panel is still actually
+      // collapsed (e.g. opened via the Run/Show Terminal button). If
+      // showTerminal became true because the user is mid-drag (see
+      // handleTerminalPanelResize below), the panel is already sized to
+      // wherever their cursor is — forcing resize(45) here would yank it
+      // to 45% out from under them mid-drag, then have it snap back as the
+      // library kept tracking the real cursor position.
+      if (panelRef.current.getSize() < 1) {
         panelRef.current.resize(45); // Show with size 45%
-      } else {
-        panelRef.current.resize(0); // Collapse to 0%
       }
+    } else {
+      panelRef.current.resize(0); // Collapse to 0%
     }
   }, [showTerminal]);
+
+  // Dragging the resize handle directly (instead of using the Show/Hide
+  // Terminal button) changes the panel's size but never touched showTerminal
+  // — so the "x" close button, which only ever does setShowTerminal(false),
+  // looked broken when the terminal was already false but visually dragged
+  // open. This keeps the two in sync regardless of how the panel was resized.
+  const handleTerminalPanelResize = useCallback((size) => {
+    const isOpen = size > 1; // ignore floating-point noise around 0
+    setShowTerminal((prev) => (prev === isOpen ? prev : isOpen));
+  }, []);
+
+  // One-time cleanup: earlier versions persisted the terminal panel's open/
+  // closed size to localStorage (see PanelGroup below), which is what caused
+  // this bug. Remove any leftover entry so it doesn't linger in the browser
+  // storage on shared lab machines.
+  useEffect(() => {
+    try {
+      window.localStorage.removeItem('react-resizable-panels:cnlab-vertical-panels');
+    } catch (_) {
+      // localStorage may be unavailable (e.g. disabled/private mode); safe to ignore
+    }
+  }, []);
 
   // Request notification permissions on component load
   useEffect(() => {
@@ -1719,7 +1749,16 @@ export default function CNLabWorkspace() {
       />
       
       <div className="flex-1 overflow-hidden">
-        <PanelGroup direction="vertical" className="h-full" autoSaveId="cnlab-vertical-panels">
+        {/* No autoSaveId here on purpose: react-resizable-panels persists panel
+            sizes to localStorage keyed by autoSaveId, globally per-browser.
+            On shared lab machines, that meant whichever student last opened/
+            closed the terminal left its size saved, and the *next* student to
+            open this page would have that leftover layout restored on mount
+            (before our showTerminal effect could correct it) — independent of
+            their own showTerminal=false starting state. That's what caused the
+            terminal to look "randomly" open. Layout here is driven entirely by
+            the showTerminal/defaultSize props below instead. */}
+        <PanelGroup direction="vertical" className="h-full">
           <Panel defaultSize={showTerminal ? 70 : 100} minSize={30} id="main-panel" order={1}>
             <PanelGroup direction="horizontal" className="h-full" autoSaveId="cnlab-horizontal-panels">
               {showQuestion && (
@@ -1800,11 +1839,12 @@ export default function CNLabWorkspace() {
           <ResizeHandle orientation="horizontal" style={{ display: showTerminal ? undefined : 'none' }} />
           <Panel
             ref={panelRef}
-            defaultSize={45}
+            defaultSize={showTerminal ? 45 : 0}
             minSize={0}
             maxSize={100}
             id="terminal-panel"
             order={3}
+            onResize={handleTerminalPanelResize}
           >
             <TerminalPane 
               onClose={() => setShowTerminal(false)} 
