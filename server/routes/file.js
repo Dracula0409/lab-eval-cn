@@ -39,8 +39,11 @@ router.get('/read-file', requireAuth, async (req, res) => {
 
     exec(command, (err, stdout, stderr) => {
       if (err) {
+        // Missing file is an expected, common outcome here (checking whether
+        // a rename target exists) — respond 404 rather than 200 so callers
+        // can't mistake this for success by only checking the body shape.
         console.error('[Docker Read Error]', stderr || err.message);
-        return res.json({ exists: false, code: null, error: stderr || 'File not found' });
+        return res.status(404).json({ exists: false, code: null, error: stderr || 'File not found' });
       }
       res.json({ exists: true, code: stdout });
     });

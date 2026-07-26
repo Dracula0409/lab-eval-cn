@@ -1058,10 +1058,36 @@ export default function CNLabWorkspace() {
       const res = await axios.get(`${API_BASE}/api/file/read-file`, {
         params: { cwd: dir, filename, sessionId: getCurrentLabSession() },
       });
-      return typeof res.data?.code === 'string' ? res.data.code : '';
+      if (!res.data?.exists) return null;
+      return typeof res.data.code === 'string' ? res.data.code : '';
     } catch {
       return null; // 404 or any other failure => no conflicting file
     }
+  };
+
+  // If `newName` already exists in `dir`, walks the student through a two-step
+  // confirmation before allowing the rename/language-switch to proceed —
+  // since the backend does a plain `mv oldPath newPath`, which silently
+  // overwrites whatever's already at newPath. Step 1 lets them back out to
+  // pick a different name instead; step 2 is a final "this permanently
+  // deletes the old contents" check, since this is a destructive, unrecoverable
+  // action. Returns true only if it's safe to proceed (no conflict, or the
+  // student explicitly confirmed the overwrite twice).
+  const confirmOverwriteIfNeeded = async (dir, newName, currentFileName) => {
+    const existingCode = await fetchExistingFileIfPresent(dir, newName);
+    if (existingCode === null) return true; // no conflict
+
+    const wantsToOverwrite = window.confirm(
+      `"${newName}" already exists in ${dir || currentWorkingDir}.\n\n` +
+      `Choose OK to overwrite "${newName}" with the contents of "${currentFileName}", ` +
+      `or Cancel to pick a different name instead.`
+    );
+    if (!wantsToOverwrite) return false;
+
+    return window.confirm(
+      `This will permanently replace the contents of "${newName}" with "${currentFileName}". ` +
+      `This cannot be undone.\n\nOverwrite "${newName}"?`
+    );
   };
 
   //handle rename and code language change
@@ -1084,31 +1110,16 @@ export default function CNLabWorkspace() {
 
     if (newPath === oldPath) return;
 
-    // A file with this exact name may already exist in the container (e.g.
-    // an earlier server.java from before a reload) — `mv` on the backend
-    // would silently overwrite it. Check first and, if it exists, load it
-    // into the editor instead of destroying it.
-    const existingCode = await fetchExistingFileIfPresent(dir, newName);
-    const fileAlreadyExists = existingCode !== null;
-
-    if (fileAlreadyExists) {
-      const proceed = window.confirm(
-        `"${newName}" already exists in ${dir || currentWorkingDir}.\n\n` +
-        `Renaming here will NOT overwrite it — the existing "${newName}" will be loaded into the editor instead, and your current file will be left as "${file.name}" on disk.\n\nContinue?`
-      );
-      if (!proceed) return;
-    }
+    // A file with this exact name may already exist in the container. The
+    // backend's rename is a plain `mv`, which would silently overwrite it —
+    // so walk the student through confirming that's actually what they want.
+    const canProceed = await confirmOverwriteIfNeeded(dir, newName, file.name);
+    if (!canProceed) return;
 
     setFiles(prevFiles =>
       prevFiles.map(f =>
         f.id === fileId
-          ? {
-              ...f,
-              name: newName,
-              path: newPath,
-              language: detectedLanguage,
-              code: fileAlreadyExists ? existingCode : f.code,
-            }
+          ? { ...f, name: newName, path: newPath, language: detectedLanguage }
           : f
       )
     );
@@ -1123,14 +1134,6 @@ export default function CNLabWorkspace() {
 
     setLanguage(detectedLanguage);
 
-    if (fileAlreadyExists) {
-      // Don't touch the container — the old file (oldPath) stays exactly as
-      // it was, and the pre-existing target file is simply now what's shown
-      // in the editor.
-      return;
-    }
-
-    // No conflict — safe to rename inside the container as before.
     try {
       await fetch(`${API_BASE}/api/rename-file`, {
         method: 'POST',
@@ -1166,30 +1169,15 @@ export default function CNLabWorkspace() {
 
     // A file with this exact name may already exist in the container (e.g.
     // an earlier server.java written before a reload, while server.c is
-    // currently open) — `mv` on the backend would silently overwrite it.
-    // Check first and, if it exists, load it into the editor instead of
-    // destroying it.
-    const existingCode = await fetchExistingFileIfPresent(dir, newName);
-    const fileAlreadyExists = existingCode !== null;
-
-    if (fileAlreadyExists) {
-      const proceed = window.confirm(
-        `"${newName}" already exists in ${dir || currentWorkingDir}.\n\n` +
-        `Switching language here will NOT overwrite it — the existing "${newName}" will be loaded into the editor instead, and your current "${file.name}" will be left untouched on disk.\n\nContinue?`
-      );
-      if (!proceed) return;
-    }
+    // currently open). The backend's rename is a plain `mv`, which would
+    // silently overwrite it — so confirm that's actually what's wanted first.
+    const canProceed = await confirmOverwriteIfNeeded(dir, newName, file.name);
+    if (!canProceed) return;
 
     setFiles(prevFiles =>
       prevFiles.map(f =>
         f.id === fileId
-          ? {
-              ...f,
-              language: newLang,
-              name: newName,
-              path: newPath,
-              code: fileAlreadyExists ? existingCode : f.code,
-            }
+          ? { ...f, language: newLang, name: newName, path: newPath }
           : f
       )
     );
@@ -1202,11 +1190,6 @@ export default function CNLabWorkspace() {
       return next;
     });
 
-    if (fileAlreadyExists) {
-      return;
-    }
-
-    // No conflict — safe to rename inside the container as before.
     try {
       await fetch(`${API_BASE}/api/rename-file`, {
         method: 'POST',

@@ -89,24 +89,18 @@ export function clearAuthCookie(res, role = 'all') {
   res.setHeader('Set-Cookie', names.map((name) => expireCookieHeader(name, secure)));
 }
 
-export async function getUserFromRequest(req, preferredRoles = []) {
-  let token;
-  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-    token = req.headers.authorization.split(' ')[1];
-  }
-  if (!token) {
-    const roleHint = req.query?.role || req.body?.role;
-    const roles = roleHint ? [roleHint] : preferredRoles;
-    for (const cookieName of cookiePreferenceForRoles(roles)) {
-      token = getCookie(req, cookieName);
-      if (token) break;
-    }
-  }
+async function resolveUserFromToken(req, token) {
   if (!token) return null;
+  let decoded;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch (err) {
+    return null; // expired/tampered/malformed — let the caller try the next candidate
+  }
 
-  const decoded = jwt.verify(token, JWT_SECRET);
   const user = await User.findById(decoded.id);
   if (!user) return null;
+
   if (user.role === 'student') {
     // Older tokens intentionally cease to work after this rollout: without a
     // server-side session id they cannot be forcefully revoked.
@@ -116,6 +110,29 @@ export async function getUserFromRequest(req, preferredRoles = []) {
     req.studentConnection = connection;
   }
   return user;
+}
+
+export async function getUserFromRequest(req, preferredRoles = []) {
+  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    const token = req.headers.authorization.split(' ')[1];
+    return resolveUserFromToken(req, token);
+  }
+
+  const roleHint = req.query?.role || req.body?.role;
+  const roles = roleHint ? [roleHint] : preferredRoles;
+
+  // Try every candidate cookie in preference order — not just the first one
+  // that happens to have a value. A stale/expired/disconnected cookie for one
+  // role must never block falling through to a perfectly valid cookie for
+  // another role (e.g. testing as both a student and a teacher in the same
+  // browser leaves both cookies set at once).
+  for (const cookieName of cookiePreferenceForRoles(roles)) {
+    const token = getCookie(req, cookieName);
+    if (!token) continue;
+    const user = await resolveUserFromToken(req, token);
+    if (user) return user;
+  }
+  return null;
 }
 
 export const protect = async (req, res, next) => {
