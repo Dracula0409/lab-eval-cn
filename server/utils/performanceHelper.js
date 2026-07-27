@@ -100,6 +100,21 @@ export function buildQuestionReport(question, run) {
   };
 }
 
+/**
+ * A question counts as "fully correct" only if the student attempted it and
+ * every check that ran (testcases, persistence, connection state) passed.
+ * Used to summarize class-wide progress (how many questions each student has
+ * fully solved) for the teacher-facing class report status boxes, without
+ * re-deriving pass/fail logic on the client.
+ */
+export function isFullyCorrect(report) {
+  if (!report?.attempted) return false;
+  if (report.tcVerdicts.length && report.tcVerdicts.some((v) => v !== 'Correct')) return false;
+  if (report.persistence === 'Wrong') return false;
+  if (CONN_LABELS.some((label) => report[label] === 'Wrong')) return false;
+  return true;
+}
+
 export function csvEscape(value) {
   const s = value === null || value === undefined ? '' : String(value);
   if (/[",\n]/.test(s)) {

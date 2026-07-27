@@ -163,6 +163,12 @@ JWT_SECRET=<generate a long random string, e.g. `openssl rand -hex 32`>
 # (for example, Nginx). This lets connection enforcement use the real client IP.
 TRUST_PROXY=false
 
+# Teacher/admin bootstrap credentials. These are used to create or update the
+# built-in teacher account on first startup. Set them to values you choose.
+TEACHER_USER_ID=networklab
+TEACHER_PASSWORD=change-me-strong-password
+LEGACY_TEACHER_PASSWORD=change-me-legacy-password
+
 # Docker / per-student containers
 SSH_IMAGE=lab-cn-image
 SSH_PORT_RANGE_START=2200
@@ -184,7 +190,19 @@ their source IP through `X-Forwarded-For`.
 
 In `server/index.js`, `allowedOrigins` currently only lists a couple of hardcoded dev URLs, plus a regex that auto-allows any `localhost`/`127.0.0.1`/`10.x.x.x` origin (fine for a private LAN classroom deployment). If the server will be reached from outside that private range, add your actual frontend origin(s) to `allowedOrigins` before deploying, e.g. `http://your-server-ip` or `https://yourdomain.com`.
 
-### 4d. Sanity-check it runs
+### 4d. First-time admin/teacher account setup
+
+On the first backend start, the server will create a built-in teacher/admin account using the values from `server/.env`:
+
+- `TEACHER_USER_ID`
+- `TEACHER_PASSWORD`
+- `LEGACY_TEACHER_PASSWORD`
+
+If you do not set these variables, the backend will stop with a clear error message until you configure them in `.env`.
+
+After the server starts successfully, sign in with the teacher username/password you configured in `.env` (for example, `networklab` + `change-me-strong-password`). If you later change those values in `.env`, restart the backend so the account is recreated or updated with the new credentials.
+
+### 4e. Sanity-check it runs
 
 ```bash
 node index.js
@@ -193,7 +211,7 @@ node index.js
 
 Ctrl+C once you've confirmed it starts and connects to MongoDB without errors, then set it up to run persistently (next step).
 
-### 4e. Run it persistently with `pm2` (simplest option)
+### 4f. Run it persistently with `pm2` (simplest option)
 
 ```bash
 sudo npm install -g pm2

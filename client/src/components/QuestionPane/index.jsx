@@ -10,6 +10,24 @@ import {
   InformationCircleIcon
 } from '@heroicons/react/24/outline';
 
+const STARTER_LANGUAGES = [
+  { key: 'c', label: 'C' },
+  { key: 'java', label: 'Java' },
+];
+
+function starterCodeForLanguages(precode, fileName = '') {
+  // Questions created before multi-language boilerplate used one string. Keep
+  // those readable rather than attempting to render an object as a React child.
+  if (typeof precode === 'string') {
+    const language = /\.java$/i.test(fileName) ? 'java' : 'c';
+    return [{ key: language, label: language === 'java' ? 'Java' : 'C', code: precode }];
+  }
+  if (!precode || typeof precode !== 'object') return [];
+  return STARTER_LANGUAGES
+    .map((language) => ({ ...language, code: precode[language.key] || '' }))
+    .filter((language) => language.code);
+}
+
 export default function QuestionPane({ 
   questions, 
   activeQuestionIdx, 
@@ -120,9 +138,16 @@ export default function QuestionPane({
                 <div className="font-mono text-xs text-gray-500 mb-1">
                   <b>{f.name}</b> (tag: {f.tag})
                 </div>
-                <pre className="bg-gray-100 border border-gray-200 rounded-lg p-3 text-xs overflow-x-auto mb-4">
-                  {f.precode}
-                </pre>
+                {starterCodeForLanguages(f.precode, f.name).length ? (
+                  starterCodeForLanguages(f.precode, f.name).map((starter) => (
+                    <div key={starter.key} className="mb-4">
+                      <div className="text-xs font-semibold text-gray-600 mb-1">{starter.label}</div>
+                      <pre className="bg-gray-100 border border-gray-200 rounded-lg p-3 text-xs overflow-x-auto">{starter.code}</pre>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-gray-500 mb-4">No starter code was provided for this file.</p>
+                )}
               </div>
             ))}
           </div>

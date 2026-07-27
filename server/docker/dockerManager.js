@@ -109,7 +109,19 @@ async function getAllocatedSshPorts() {
     try {
       const container = docker.getContainer(containerInfo.Id);
       const inspect = await container.inspect();
-      const binding = inspect.NetworkSettings?.Ports?.['22/tcp'];
+      // NetworkSettings.Ports only reflects a *live* binding, so it reads as
+      // empty/null for any stopped container — which is exactly the case we
+      // land in here (containerInfo.Ports was empty). HostConfig.PortBindings
+      // is the port reservation baked in at `docker create` time and persists
+      // regardless of run state, so it's the only reliable source for "is
+      // this port already spoken for" across stopped containers. Using
+      // NetworkSettings here let a stopped container's port silently look
+      // free, so a brand-new container for a different student could be
+      // handed that exact same host port — and when the original student's
+      // (stopped) container later tried to restart on it, Docker refused
+      // because the new container was already bound to it, hard-failing
+      // /api/sessions/init and orphaning the original container.
+      const binding = inspect.HostConfig?.PortBindings?.['22/tcp'];
       addBindingPorts(binding);
     } catch (err) {
       console.warn(`[Dockerode] Failed to inspect container ${containerInfo.Id}: ${err.message}`);
@@ -160,6 +172,17 @@ export async function createContainerForUser(userId, requestedSessionId = null) 
           containerState = await getContainerState(existingContainer);
         } else if (err.statusCode === 409 || /removal of container/i.test(err.message || '')) {
           throw new Error(`Container ${containerName} is busy being removed. Please retry in a moment.`);
+        } else if (/port is already allocated|address already in use/i.test(err.message || '')) {
+          // The port this stopped container was reserved on has since been
+          // handed to a different container (previously possible due to a
+          // stale port-tracking bug; kept here as a safety net). Recreate
+          // this container on a fresh free port instead of hard-failing —
+          // the volume (and therefore the student's saved files) is reused
+          // untouched, so nobody loses code over this.
+          console.warn(`[Dockerode] Port conflict restarting ${containerName}; recreating on a new port`);
+          await existingContainer.remove({ force: true });
+          const sshPort = await createAndStartContainer(containerName, volumeName);
+          return { containerName, volumeName, sshPort, sessionId };
         } else {
           throw err;
         }
@@ -187,6 +210,14 @@ export async function createContainerForUser(userId, requestedSessionId = null) 
     console.log(`[Dockerode] Created volume ${volumeName}`);
   }
 
+  const sshPort = await createAndStartContainer(containerName, volumeName);
+  return { containerName, volumeName, sshPort, sessionId };
+  });
+}
+
+// Picks a free host port and creates+starts a container bound to it,
+// reusing (never wiping) the given volume so student files survive.
+async function createAndStartContainer(containerName, volumeName) {
   // Reserve a new random port for SSH.
   // Sized for a worst case of 300 concurrent students with headroom —
   // 100 ports was a hard ceiling that made >100 concurrent containers
@@ -234,8 +265,7 @@ export async function createContainerForUser(userId, requestedSessionId = null) 
   await applyContainerAcl(container, containerName);
   console.log(`[Dockerode] Started new container ${containerName} on port ${sshPort}`);
 
-  return { containerName, volumeName, sshPort, sessionId };
-  });
+  return sshPort;
 }
 
 async function runInContainer(container, cmd) {

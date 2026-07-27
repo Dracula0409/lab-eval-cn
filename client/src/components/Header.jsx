@@ -29,6 +29,12 @@ export default function Header({
   onExitLab,
   studentId
 }) {
+  const handleLogoutClick = () => {
+    if (window.confirm('Are you sure you want to log out?')) {
+      onLogout();
+    }
+  };
+
   return (
     <header className="bg-white/80 backdrop-blur-lg border-b border-gray-200/50 shadow-lg">
       <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/5 via-purple-500/5 to-cyan-500/5"></div>
@@ -115,7 +121,7 @@ export default function Header({
           {/* Logout button for teacher pages */}
           {isTeacherPage && onLogout && (
             <button
-              onClick={onLogout}
+              onClick={handleLogoutClick}
               className="flex items-center space-x-2 px-4 py-2 text-sm font-medium text-red-600 hover:text-white bg-red-50 hover:bg-red-600 backdrop-blur-sm rounded-xl border border-red-200/50 shadow-sm hover:shadow-md transition-all duration-300"
             >
               <ArrowRightOnRectangleIcon className="w-4 h-4" />

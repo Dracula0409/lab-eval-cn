@@ -21,8 +21,22 @@ const initialQuestion = {
   questionKey: 'q1',
   maxMarks: 15,
   files: [
-    { name: 'server.c', tag: 's1', precode: '#include <stdio.h>\n// server starter\n' },
-    { name: 'client.c', tag: 'c1', precode: '#include <stdio.h>\n// client starter\n' },
+    {
+      name: 'server',
+      tag: 's1',
+      precode: {
+        c: '#include <stdio.h>\n// server starter\n',
+        java: 'public class Server {\n    public static void main(String[] args) {\n        // server starter\n    }\n}\n',
+      },
+    },
+    {
+      name: 'client',
+      tag: 'c1',
+      precode: {
+        c: '#include <stdio.h>\n// client starter\n',
+        java: 'public class Client {\n    public static void main(String[] args) {\n        // client starter\n    }\n}\n',
+      },
+    },
   ],
   testcases: {
     testcase1: [[0], { c1_to_s1: 'Hi' }, [0], { s1_to_c1: 'Hi' }],
@@ -661,18 +675,6 @@ export default function TeacherUpload() {
     }
   };
 
-  function getLanguageFromFilename(filename) {
-    const ext = filename.split('.').pop().toLowerCase();
-    if (ext === 'py') return 'python';
-    if (ext === 'js') return 'javascript';
-    if (ext === 'cpp' || ext === 'cc' || ext === 'cxx') return 'cpp';
-    if (ext === 'java') return 'java';
-    if (ext === 'html') return 'html';
-    if (ext === 'css') return 'css';
-    if (ext === 'json') return 'json';
-    return 'c';
-  }
-
   return (
     <div className="min-h-screen bg-gray-50">
       <Header 
@@ -794,7 +796,6 @@ export default function TeacherUpload() {
                   editingQuestionId={editingQuestionId}
                   isLoading={isLoading}
                   watchedValues={watchedValues}
-                  getLanguageFromFilename={getLanguageFromFilename}
                 />
               </div>
             ) : activeTab === 'manage' ? (

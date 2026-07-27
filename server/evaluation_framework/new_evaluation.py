@@ -266,9 +266,9 @@ for idx, item in enumerate(pairs):
             else:
                 # For struct/array checks we expect a raw hex literal like "0x68656C6C6F0000000000"
                 if isinstance(expected_data, str) and expected_data.startswith(("0x", "0X")):
-                    #print("obtained :", actual)
-                    #print("expected :", expected_data)
+                    print("obtained :");print_ascii(actual)
                     expected_hex = expected_data[2:].replace(" ", "").lower()
+                    print("expected :");print_ascii(expected_hex)
                     matched = compare_hex_with_pattern(actual, expected_hex, pattern)
                 else:
                     print(f"Pattern {pattern} used with non-hex data {expected_data}; "
