@@ -1,3 +1,4 @@
+import dotenv from 'dotenv';
 import express from 'express';
 import User from '../models/User.js';
 import PasswordResetRequest from '../models/PasswordResetRequest.js';
@@ -6,11 +7,25 @@ import StudentConnection from '../models/StudentConnection.js';
 import SessionDisconnectRequest from '../models/SessionDisconnectRequest.js';
 import { activeConnectionFilter, createStudentConnection, revokeStudentConnection } from '../utils/studentConnections.js';
 
+dotenv.config();
+
 const router = express.Router();
 
-const TEACHER_USER_ID = 'networklab';
-const TEACHER_PASSWORD = 'admin@123';
-const LEGACY_TEACHER_PASSWORD = 'admiin@123';
+export function getTeacherAuthConfig(env = process.env) {
+  const teacherUserId = env.TEACHER_USER_ID?.trim();
+  const teacherPassword = env.TEACHER_PASSWORD?.trim();
+
+  if (!teacherUserId || !teacherPassword) {
+    throw new Error('TEACHER_USER_ID and TEACHER_PASSWORD must be set in server/.env');
+  }
+
+  return {
+    teacherUserId,
+    teacherPassword,
+  };
+}
+
+const { teacherUserId: TEACHER_USER_ID, teacherPassword: TEACHER_PASSWORD } = getTeacherAuthConfig();
 
 function validateStudentPassword(password) {
   if (String(password || '').length < 8) {
@@ -32,6 +47,18 @@ async function ensureTeacherUser() {
     }
     if (existing.name !== 'Network Lab Teacher') {
       existing.name = 'Network Lab Teacher';
+      changed = true;
+    }
+    if (existing.user_id !== TEACHER_USER_ID) {
+      existing.user_id = TEACHER_USER_ID;
+      changed = true;
+    }
+    if (existing.roll_number !== TEACHER_USER_ID) {
+      existing.roll_number = TEACHER_USER_ID;
+      changed = true;
+    }
+    if (existing.password !== TEACHER_PASSWORD) {
+      existing.password = TEACHER_PASSWORD;
       changed = true;
     }
     if (existing.mustChangePassword) {
@@ -57,9 +84,7 @@ router.post('/teacher-login', async (req, res) => {
     const { username, password } = req.body;
     const teacher = await ensureTeacherUser();
 
-    const passwordMatches =
-      password === teacher.password ||
-      (username === TEACHER_USER_ID && password === LEGACY_TEACHER_PASSWORD);
+    const passwordMatches = password === teacher.password;
 
     if (username !== TEACHER_USER_ID || !passwordMatches) {
       return res.status(401).json({ error: 'Invalid username or password.' });
