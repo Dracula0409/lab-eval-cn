@@ -516,19 +516,7 @@ export default function CNLabWorkspace() {
           }
           lastLoadedModuleIdRef.current = 'free_coding';
 
-          setQuestions([{
-            id: "free_coding",
-            title: "Free Coding",
-            description: "No lab module has been assigned right now. Write, run, and experiment with any C program you'd like — nothing here is graded.",
-            questionKey: "free",
-            files: [
-              { name: "main.c", tag: "main", precode: "#include <stdio.h>\n\nint main() {\n    // Write your code here\n    return 0;\n}\n" }
-            ],
-            testcases: {},
-            input: "",
-            evalScript: "",
-            maxMarks: null,
-          }]);
+          setQuestions([buildFreeCodingQuestion()]);
         }
       } catch (error) {
         console.error('Error loading module data:', error);
@@ -551,19 +539,7 @@ export default function CNLabWorkspace() {
           setActiveQuestionIdx(0);
         }
         lastLoadedModuleIdRef.current = 'free_coding';
-        setQuestions([{
-          id: "free_coding",
-          title: "Free Coding",
-          description: "Couldn't reach the lab server just now. Write, run, and experiment with any C program you'd like — nothing here is graded.",
-          questionKey: "free",
-          files: [
-            { name: "main.c", tag: "main", precode: "#include <stdio.h>\n\nint main() {\n    // Write your code here\n    return 0;\n}\n" }
-          ],
-          testcases: {},
-          input: "",
-          evalScript: "",
-          maxMarks: null,
-        }]);
+        setQuestions([buildFreeCodingQuestion()]);
       } finally {
         setLoadingQuestions(false);
       }
@@ -612,6 +588,62 @@ export default function CNLabWorkspace() {
       clearInterval(checkModuleInterval);
     };
   }, [authReady, forceFreeCoding, requestedModuleId]);
+
+  const getBoilerplateForLanguage = (precode, targetLanguage = 'c') => {
+    if (typeof precode === 'string') {
+      return targetLanguage === 'c' ? precode : '';
+    }
+    if (!precode || typeof precode !== 'object') {
+      return '';
+    }
+
+    if (precode[targetLanguage]) {
+      return precode[targetLanguage];
+    }
+
+    if (targetLanguage === 'java') {
+      return precode.java || precode.c || '';
+    }
+
+    return precode.c || precode.java || '';
+  };
+
+  const findQuestionFileForDescriptor = (question, descriptor) => {
+    if (!question?.files?.length || !descriptor) return null;
+
+    const descriptorName = String(descriptor.name || '');
+    const descriptorBase = descriptorName.replace(/\.(c|java)$/i, '');
+    const descriptorTag = descriptor.tag;
+
+    return question.files.find((candidate) => {
+      const candidateName = String(candidate.name || '');
+      const candidateBase = candidateName.replace(/\.(c|java)$/i, '');
+      return (
+        (descriptorTag && candidate.tag === descriptorTag) ||
+        candidateName === descriptorName ||
+        candidateBase === descriptorBase
+      );
+    });
+  };
+
+  const buildFreeCodingQuestion = () => {
+    const cStarter = `#include <stdio.h>\n\nint main() {\n    // Write your code here\n    return 0;\n}\n`;
+    const javaStarter = `public class Main {\n    public static void main(String[] args) {\n        // Write your code here\n    }\n}\n`;
+
+    return {
+      id: 'free_coding',
+      title: 'Free Coding',
+      description: 'No lab module has been assigned right now. Write, run, and experiment with any C or Java program you’d like — nothing here is graded.',
+      questionKey: 'free',
+      files: [
+        { name: 'Main.c', tag: 'main', precode: { c: cStarter, java: javaStarter } }
+      ],
+      testcases: {},
+      input: '',
+      evalScript: '',
+      maxMarks: null,
+    };
+  };
 
   useEffect(() => {
     if (!moduleInfo?._id || moduleInfo._id === 'free_coding') return undefined;
@@ -744,15 +776,13 @@ export default function CNLabWorkspace() {
         const dir = f.path ? f.path.split('/').slice(0, -1).join('/') : LABUSER_HOME;
         const filePath = f.path || `${LABUSER_HOME}/${effectiveName}`;
 
-        const baseName = f.name.replace(/\.(c|java)$/i, '');
-        const questionFile = (activeQuestion.files || []).find(qf => qf.name === baseName);
+        const questionFile = findQuestionFileForDescriptor(activeQuestion, f);
         const precode = questionFile?.precode;
-        let code = f.code ?? (typeof precode === 'string' ? precode : (precode?.[lang] || precode?.c || ''));
-        const starterCodeByLanguage = f.starterCodeByLanguage || (
-          typeof precode === 'object' && precode
-            ? { c: precode.c || '', java: precode.java || '' }
-            : { c: typeof precode === 'string' ? precode : '', java: '' }
-        );
+        let code = f.code ?? getBoilerplateForLanguage(precode, lang);
+        const starterCodeByLanguage = f.starterCodeByLanguage || {
+          c: getBoilerplateForLanguage(precode, 'c'),
+          java: getBoilerplateForLanguage(precode, 'java'),
+        };
 
         // A remembered file already has the in-memory editor content above.
         // Only fresh/default files need disk hydration.
@@ -1254,16 +1284,9 @@ export default function CNLabWorkspace() {
 
 
   const getFileBoilerplate = (file, targetLanguage = file?.language) => {
-    const questionFile = questions[activeQuestionIdx]?.files?.find((candidate) => {
-      const candidateBase = String(candidate.name || '').replace(/\.(c|java)$/i, '');
-      const fileBase = String(file?.name || '').replace(/\.(c|java)$/i, '');
-      return (file?.tag && candidate.tag === file.tag) || candidateBase === fileBase;
-    });
+    const questionFile = findQuestionFileForDescriptor(questions[activeQuestionIdx], file);
     const precode = questionFile?.precode;
-    if (typeof precode === 'string') {
-      return targetLanguage === 'c' ? precode : '';
-    }
-    return precode?.[targetLanguage] ?? file?.starterCodeByLanguage?.[targetLanguage] ?? '';
+    return getBoilerplateForLanguage(precode, targetLanguage) || file?.starterCodeByLanguage?.[targetLanguage] || '';
   };
 
   const updateFileLanguage = async (fileId, newLang) => {

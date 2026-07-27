@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import Header from '../components/Header';
@@ -15,6 +15,8 @@ export default function TeacherBatches() {
   const [studentDraft, setStudentDraft] = useState({ name: '', batch: '', password: '' });
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [selectedBatch, setSelectedBatch] = useState('');
+  const [studentSearch, setStudentSearch] = useState('');
 
   const passwordPlaceholder = form.name.trim()
     ? `${form.name.trim().toLowerCase()}batch`
@@ -118,6 +120,28 @@ export default function TeacherBatches() {
     }
   };
 
+  const batchCounts = useMemo(() => {
+    return students.reduce((counts, student) => {
+      const batch = student.batch || 'Unknown';
+      counts[batch] = (counts[batch] || 0) + 1;
+      return counts;
+    }, {});
+  }, [students]);
+
+  const filteredStudents = useMemo(() => {
+    let list = students;
+    if (selectedBatch) {
+      list = list.filter((student) => student.batch === selectedBatch);
+    }
+    const term = studentSearch.trim().toLowerCase();
+    if (!term) return list;
+    return list.filter((student) => (
+      String(student.name || '').toLowerCase().includes(term)
+      || String(student.user_id || '').toLowerCase().includes(term)
+      || String(student.roll_number || '').toLowerCase().includes(term)
+    ));
+  }, [students, selectedBatch, studentSearch]);
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Header
@@ -208,16 +232,45 @@ export default function TeacherBatches() {
 
             <div className="bg-white border border-gray-200 rounded-lg p-5 shadow-sm">
               <h2 className="text-base font-semibold text-gray-900 mb-3">Batches</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-4">
+                <button
+                  type="button"
+                  onClick={() => setSelectedBatch('')}
+                  className={`text-left border rounded-md p-3 transition ${selectedBatch === '' ? 'border-indigo-600 bg-indigo-50' : 'border-gray-200 bg-white hover:border-gray-300'}`}
+                >
+                  <p className="font-semibold text-gray-900">All batches</p>
+                  <p className="text-sm text-gray-500">{students.length} students</p>
+                </button>
                 {batches.map((b) => (
-                  <div key={b._id} className="border rounded-md p-3">
+                  <button
+                    key={b._id}
+                    type="button"
+                    onClick={() => setSelectedBatch(b.name)}
+                    className={`text-left border rounded-md p-3 transition ${selectedBatch === b.name ? 'border-indigo-600 bg-indigo-50' : 'border-gray-200 bg-white hover:border-gray-300'}`}
+                  >
                     <p className="font-semibold text-gray-900">{b.name}</p>
-                    <p className="text-sm text-gray-500">{b.studentIds?.length || 0} students</p>
-                  </div>
+                    <p className="text-sm text-gray-500">{batchCounts[b.name] || 0} students</p>
+                  </button>
                 ))}
               </div>
 
-              <h3 className="text-sm font-semibold text-gray-700 mb-2">Students</h3>
+              <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-700">Students</h3>
+                  <p className="text-xs text-gray-500">Filter by batch and search by name or ID.</p>
+                </div>
+                <div className="w-full sm:w-80">
+                  <label className="sr-only" htmlFor="student-search">Search students</label>
+                  <input
+                    id="student-search"
+                    value={studentSearch}
+                    onChange={(e) => setStudentSearch(e.target.value)}
+                    placeholder="Search by name or ID"
+                    className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm"
+                  />
+                </div>
+              </div>
+
               <div className="overflow-x-auto border rounded-md">
                 <table className="min-w-full text-sm">
                   <thead className="bg-gray-50 text-xs uppercase text-gray-500">
@@ -230,7 +283,7 @@ export default function TeacherBatches() {
                     </tr>
                   </thead>
                   <tbody className="divide-y">
-                    {students.map((s) => (
+                    {filteredStudents.map((s) => (
                       <tr key={s.user_id}>
                         <td className="px-3 py-2">{s.user_id}</td>
                         {editingStudentId === s.user_id ? (
