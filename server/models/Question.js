@@ -2,11 +2,39 @@ import mongoose from "mongoose";
 
 const fileSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true },
+    name: { type: String, required: true }, // base filename, no extension (e.g. "server", not "server.c")
     tag: { type: String, required: true },
-    precode: { type: String, default: "" },
+    // Per-language starter code, keyed by the languages this platform
+    // supports ('c', 'java'). Mixed (rather than a strict sub-schema) so
+    // older questions saved before this field existed a plain string don't
+    // fail validation on read — see the toJSON transform below, which
+    // normalizes those into this shape for every consumer.
+    precode: { type: mongoose.Schema.Types.Mixed, default: () => ({ c: '', java: '' }) },
   },
-  { _id: false }
+  {
+    _id: false,
+    toJSON: {
+      transform: (_doc, ret) => {
+        // Pre-migration questions stored precode as a single string that
+        // implicitly matched whatever extension `name` had (e.g.
+        // name: "server.c", precode: "..."). Normalize both here so every
+        // consumer (teacher form, student workspace) only ever has to
+        // handle the new { c, java } / extension-less shape.
+        const legacyLang = /\.java$/i.test(ret.name || '') ? 'java' : 'c';
+        if (typeof ret.precode === 'string') {
+          ret.precode = { c: '', java: '', [legacyLang]: ret.precode };
+        } else if (!ret.precode || typeof ret.precode !== 'object') {
+          ret.precode = { c: '', java: '' };
+        } else {
+          ret.precode = { c: '', java: '', ...ret.precode };
+        }
+        if (ret.name) {
+          ret.name = ret.name.replace(/\.(c|java)$/i, '');
+        }
+        return ret;
+      },
+    },
+  }
 );
 
 const baseQuestionSchema = new mongoose.Schema(

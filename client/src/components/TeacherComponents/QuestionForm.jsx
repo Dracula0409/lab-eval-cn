@@ -1,9 +1,34 @@
+import { useState } from 'react';
 import { Controller } from 'react-hook-form';
 import axios from 'axios';
 import { FormSection, FormLabel, ErrorMessage } from '../FormComponents';
 import TiptapEditor from '../TiptapEditor';
 import Editor from "@monaco-editor/react";
 import { PlusIcon } from '@heroicons/react/24/outline';
+
+const SUPPORTED_LANGUAGES = [
+  { key: 'c', label: 'C' },
+  { key: 'java', label: 'Java' },
+];
+
+// Import JSON reads a file straight off disk, bypassing the backend's
+// toJSON normalization — so a JSON export from before this feature (base
+// name with an extension baked in, precode as a single string) needs the
+// same legacy handling applied here on the client.
+function normalizeFiles(rawFiles) {
+  if (!Array.isArray(rawFiles)) return [];
+  return rawFiles.map((f) => {
+    const name = (f.name || '').replace(/\.(c|java)$/i, '');
+    const legacyLang = /\.java$/i.test(f.name || '') ? 'java' : 'c';
+    let precode;
+    if (typeof f.precode === 'string') {
+      precode = { c: '', java: '', [legacyLang]: f.precode };
+    } else {
+      precode = { c: '', java: '', ...(f.precode || {}) };
+    }
+    return { ...f, name, precode };
+  });
+}
 
 const defaultSampleEvalScript = `START_TCPDUMP "tcp" "\${SERVER_PORT[0]}" "transfer.pcap"
 sleep 2
@@ -35,16 +60,21 @@ const QuestionForm = ({
   isLoading,
   watchedValues,
   setValue,
-  getLanguageFromFilename,
 }) => {
   const files = watchedValues.files || [];
+  // Which language tab (C/Java) is currently showing in each file's editor —
+  // purely local UI state, not part of the saved question.
+  const [activeLangByIdx, setActiveLangByIdx] = useState({});
 
   const addFile = () => {
-    const name = prompt('File name (e.g. server.c):');
+    const name = prompt('File name, without extension (e.g. server):');
     if (!name) return;
     const tag = prompt('Tag for this file (e.g. s1, c1, c2):');
     if (!tag) return;
-    setValue('files', [...files, { name, tag, precode: '// starter code\n' }]);
+    setValue('files', [
+      ...files,
+      { name: name.replace(/\.(c|java)$/i, ''), tag, precode: { c: '', java: '' } },
+    ]);
   };
 
   const removeFile = (idx) => {
@@ -56,6 +86,13 @@ const QuestionForm = ({
     next[idx] = { ...next[idx], [field]: value };
     setValue('files', next);
   };
+
+  const updateFilePrecode = (idx, lang, value) => {
+    const current = files[idx]?.precode || {};
+    updateFile(idx, 'precode', { ...current, [lang]: value });
+  };
+
+  const activeLangFor = (idx) => activeLangByIdx[idx] || 'c';
 
   return (
     <form onSubmit={handleFormSubmit(onSubmit)} className="space-y-8">
@@ -109,7 +146,10 @@ const QuestionForm = ({
 
       <FormSection title="Code Files">
         <p className="text-sm text-gray-600 mb-3">
-          Each file has a custom tag (s1, c1, c2, …). Tags are used in testcases and referenced as $TAG_s1 in evalScript.
+          Each file has a custom tag (s1, c1, c2, …) used in testcases and to be referenced easily
+          in evaluation. Give each file a base name only, without an extension — the student's
+          own language choice (C or Java) decides which extension and which boilerplate below
+          they actually get.
         </p>
         <button
           type="button"
@@ -119,34 +159,53 @@ const QuestionForm = ({
           <PlusIcon className="w-4 h-4 mr-1" /> Add File
         </button>
 
-        {files.map((file, idx) => (
-          <div key={idx} className="mb-4 border rounded-lg overflow-hidden">
-            <div className="flex gap-3 items-center px-4 py-2 bg-gray-100">
-              <input
-                value={file.name}
-                onChange={(e) => updateFile(idx, 'name', e.target.value)}
-                className="border rounded px-2 py-1 text-sm flex-1"
-                placeholder="server.c"
-              />
-              <input
-                value={file.tag}
-                onChange={(e) => updateFile(idx, 'tag', e.target.value)}
-                className="border rounded px-2 py-1 text-sm w-24"
-                placeholder="s1"
-              />
-              <button type="button" onClick={() => removeFile(idx)} className="text-red-500 text-sm">Remove</button>
+        {files.map((file, idx) => {
+          const activeLang = activeLangFor(idx);
+          return (
+            <div key={idx} className="mb-4 border rounded-lg overflow-hidden">
+              <div className="flex gap-3 items-center px-4 py-2 bg-gray-100">
+                <input
+                  value={file.name}
+                  onChange={(e) => updateFile(idx, 'name', e.target.value.replace(/\.(c|java)$/i, ''))}
+                  className="border rounded px-2 py-1 text-sm flex-1"
+                  placeholder="server"
+                />
+                <input
+                  value={file.tag}
+                  onChange={(e) => updateFile(idx, 'tag', e.target.value)}
+                  className="border rounded px-2 py-1 text-sm w-24"
+                  placeholder="s1"
+                />
+                <button type="button" onClick={() => removeFile(idx)} className="text-red-500 text-sm">Remove</button>
+              </div>
+              <div className="flex gap-1 px-4 pt-2 bg-white border-b">
+                {SUPPORTED_LANGUAGES.map(({ key, label }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setActiveLangByIdx((prev) => ({ ...prev, [idx]: key }))}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-t-md border border-b-0 ${
+                      activeLang === key
+                        ? 'bg-gray-900 text-white border-gray-900'
+                        : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="h-48">
+                <Editor
+                  height="100%"
+                  language={activeLang}
+                  value={file.precode?.[activeLang] || ''}
+                  onChange={(v) => updateFilePrecode(idx, activeLang, v ?? '')}
+                  options={{ minimap: { enabled: false }, fontSize: 13 }}
+                />
+              </div>
             </div>
-            <div className="h-48">
-              <Editor
-                height="100%"
-                language={getLanguageFromFilename(file.name)}
-                value={file.precode || ''}
-                onChange={(v) => updateFile(idx, 'precode', v ?? '')}
-                options={{ minimap: { enabled: false }, fontSize: 13 }}
-              />
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </FormSection>
 
       <FormSection title="Evaluation Data (copied to container at run time)">
@@ -225,7 +284,7 @@ const QuestionForm = ({
                   description: data.description || '',
                   questionKey: data.questionKey || 'q1',
                   maxMarks: data.maxMarks || 15,
-                  files: data.files || [],
+                  files: normalizeFiles(data.files || []),
                   testcases: data.testcases || {},
                   input: data.input || '',
                   evalScript: data.evalScript || data.evalscripts?.['nice.sh'] || defaultSampleEvalScript,

@@ -311,13 +311,20 @@ export default function CNLabWorkspace() {
   const [tagToFileMap, setTagToFileMap] = useState({}); // Example: { 'server1': 'server_file.c', 'client2': 'client_impl.c' }
   const [currentWorkingDir, setCurrentWorkingDir] = useState('/home/labuser'); // Track current directory
   const [saveStatus, setSaveStatus] = useState('idle'); //track autosave status
-  const [activeFileId, setActiveFileId] = useState('server');
+  const [activeFileId, setActiveFileId] = useState(null);
   const [showFileModal, setShowFileModal] = useState(false);
   const [availableFiles, setAvailableFiles] = useState([]);
   const [isRunning, setIsRunning] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [testCaseResults, setTestCaseResults] = useState({});
+  // Question ids that already have at least one submission where every test
+  // case passed — drives the Submit -> Re-submit button label and the
+  // resubmission confirmation dialog. Once a question is in here it stays
+  // (an accepted submission doesn't get un-accepted), so this only ever
+  // grows during a session.
+  const [passedQuestionIds, setPassedQuestionIds] = useState(new Set());
+  const checkedPassedQuestionIdsRef = useRef(new Set());
   const [questionPaneTab, setQuestionPaneTab] = useState('description');
   const [evalMessage, setEvalMessage] = useState(null);
   const [submissionRefreshTrigger, setSubmissionRefreshTrigger] = useState(0);
@@ -341,6 +348,20 @@ export default function CNLabWorkspace() {
   const logBoxRef = useRef(null);
   const dirtyFileIdsRef = useRef(new Set());
   const fileHydrationRequestRef = useRef(0);
+
+  // Per-question memory of which files were open (the question's own
+  // defaults plus anything the student opened/created beyond them) so that
+  // switching to another question and back restores the exact working set
+  // instead of resetting to just the default files. Keyed by question id.
+  const questionFileMemoryRef = useRef({});
+  const lastHydratedQuestionIdRef = useRef(null);
+  // Mirrors of `files`/`activeFileId` for use inside the hydration effect
+  // below, which intentionally does NOT depend on `files` itself (that
+  // would re-run it — and wipe the open tabs — on every keystroke).
+  const filesRef = useRef(files);
+  useEffect(() => { filesRef.current = files; }, [files]);
+  const activeFileIdRef = useRef(activeFileId);
+  useEffect(() => { activeFileIdRef.current = activeFileId; }, [activeFileId]);
   const lastLoadedModuleIdRef = useRef(null);
   const autoSubmitStartedRef = useRef(false);
   const closeSentRef = useRef(false);
@@ -423,6 +444,14 @@ export default function CNLabWorkspace() {
         if (moduleData) {
           console.log('Loaded active module from server:', moduleData._id);
 
+          // A new module must never inherit tabs from the previous module.
+          // Reset the selected question as modules can have different counts.
+          if (lastLoadedModuleIdRef.current !== moduleData._id) {
+            questionFileMemoryRef.current = {};
+            lastHydratedQuestionIdRef.current = null;
+            setActiveQuestionIdx(0);
+          }
+
           // Set module info
           setModuleInfo({
             _id: moduleData._id,
@@ -480,6 +509,12 @@ export default function CNLabWorkspace() {
             date: new Date().toISOString()
           });
           setAttemptInfo(null);
+          if (lastLoadedModuleIdRef.current !== 'free_coding') {
+            questionFileMemoryRef.current = {};
+            lastHydratedQuestionIdRef.current = null;
+            setActiveQuestionIdx(0);
+          }
+          lastLoadedModuleIdRef.current = 'free_coding';
 
           setQuestions([{
             id: "free_coding",
@@ -510,6 +545,12 @@ export default function CNLabWorkspace() {
           date: new Date().toISOString()
         });
         setAttemptInfo(null);
+        if (lastLoadedModuleIdRef.current !== 'free_coding') {
+          questionFileMemoryRef.current = {};
+          lastHydratedQuestionIdRef.current = null;
+          setActiveQuestionIdx(0);
+        }
+        lastLoadedModuleIdRef.current = 'free_coding';
         setQuestions([{
           id: "free_coding",
           title: "Free Coding",
@@ -619,18 +660,14 @@ export default function CNLabWorkspace() {
   };
 
 
-  useEffect(() => {
-    fetch('/codeFiles.json')
-      .then(res => res.json())
-      .then(data => {
-        // Ensure each file has a .path property (default to name if not present)
-        setFiles(data.map(f => ({
-          ...f,
-          path: `${currentWorkingDir}/${f.name}` // always set path
-        })));
-      })
-      .catch(err => console.error("Error loading files:", err));
-  }, []);
+  // NOTE: this component used to also fetch a static /codeFiles.json demo
+  // file here and dump it straight into `files` on every mount. That was
+  // leftover scaffolding from early development, fully superseded by the
+  // real per-question hydration effect below — and since both ran
+  // concurrently on mount, whichever one finished second "won", so on some
+  // loads the unrelated demo server.c/client.c content would flash into the
+  // editor for a moment before the real question's files replaced it.
+  // Removed entirely; nothing else in this file depends on it.
 
 
   useEffect(() => {
@@ -655,37 +692,95 @@ export default function CNLabWorkspace() {
       const requestId = fileHydrationRequestRef.current + 1;
       fileHydrationRequestRef.current = requestId;
 
+      // Snapshot whatever was open for the question we're navigating away
+      // from — the default files AND any extra ones the student opened via
+      // "New File"/"Open" — so coming back later restores that exact set
+      // instead of resetting to just the question's defaults.
+      const previousQuestionId = lastHydratedQuestionIdRef.current;
+      if (previousQuestionId && filesRef.current.length) {
+        const activeFile = filesRef.current.find(f => f.id === activeFileIdRef.current);
+        questionFileMemoryRef.current[previousQuestionId] = {
+          descriptors: filesRef.current.map(f => ({
+            // Include the current editor content, not just file metadata.
+            // An autosave can still be pending when a student clicks another
+            // question, so re-reading only from disk could otherwise reopen
+            // the tab with stale/empty content.
+            id: f.id, name: f.name, tag: f.tag, path: f.path,
+            language: f.language, code: f.code,
+            starterCodeByLanguage: f.starterCodeByLanguage,
+          })),
+          activeFileName: activeFile?.name ?? null,
+        };
+      }
+
+      const remembered = questionFileMemoryRef.current[activeQuestion.id];
+      const rememberedDescriptors = remembered?.descriptors || [];
+      // If the teacher added a new default file to this question after the
+      // student's last visit, make sure it still shows up alongside
+      // whatever was remembered, instead of being silently missed.
+      const rememberedTags = new Set(rememberedDescriptors.map(d => d.tag).filter(Boolean));
+      const newDefaultsSinceLastVisit = (activeQuestion.files || [])
+        .filter(qf => qf.tag && !rememberedTags.has(qf.tag))
+        .map(qf => ({ name: qf.name, tag: qf.tag }));
+
+      const baseDescriptors = remembered
+        ? [...rememberedDescriptors, ...newDefaultsSinceLastVisit]
+        : (activeQuestion.files || []).map(f => ({ name: f.name, tag: f.tag }));
+
       const loadFilesForQuestion = async () => {
-        const filesFromQuestion = await Promise.all((activeQuestion.files || []).map(async (f) => {
-        let lang = 'plaintext';
-        if (f.name?.endsWith('.java')) lang = 'java';
-        else if (f.name?.endsWith('.c')) lang = 'c';
+        const filesFromQuestion = await Promise.all(baseDescriptors.map(async (f) => {
+        // Files remembered from an earlier hydration already carry a
+        // resolved language and a name with its extension baked in. A file
+        // straight from the question definition doesn't (teachers now only
+        // give a base name, e.g. "server") — default those to C, matching
+        // the workspace's overall default language.
+        let lang = f.language;
+        if (!lang) {
+          lang = f.name?.endsWith('.java') ? 'java' : f.name?.endsWith('.c') ? 'c' : 'c';
+        }
 
-        const filePath = `${LABUSER_HOME}/${f.name}`;
-        let code = f.precode || '';
+        const hasExtension = /\.(c|java)$/i.test(f.name || '');
+        const effectiveName = hasExtension ? f.name : `${f.name}.${lang}`;
+        const dir = f.path ? f.path.split('/').slice(0, -1).join('/') : LABUSER_HOME;
+        const filePath = f.path || `${LABUSER_HOME}/${effectiveName}`;
 
-        try {
-          const response = await axios.get(`${API_BASE}/api/file/read-file`, {
-            params: {
-              cwd: LABUSER_HOME,
-              filename: f.name,
-              sessionId: getCurrentLabSession(),
-            },
-          });
-          if (response.data?.exists) {
-            code = response.data.code ?? code;
+        const baseName = f.name.replace(/\.(c|java)$/i, '');
+        const questionFile = (activeQuestion.files || []).find(qf => qf.name === baseName);
+        const precode = questionFile?.precode;
+        let code = f.code ?? (typeof precode === 'string' ? precode : (precode?.[lang] || precode?.c || ''));
+        const starterCodeByLanguage = f.starterCodeByLanguage || (
+          typeof precode === 'object' && precode
+            ? { c: precode.c || '', java: precode.java || '' }
+            : { c: typeof precode === 'string' ? precode : '', java: '' }
+        );
+
+        // A remembered file already has the in-memory editor content above.
+        // Only fresh/default files need disk hydration.
+        if (f.code === undefined) {
+          try {
+            const response = await axios.get(`${API_BASE}/api/file/read-file`, {
+              params: {
+                cwd: dir,
+                filename: effectiveName,
+                sessionId: getCurrentLabSession(),
+              },
+            });
+            if (response.data?.exists) {
+              code = response.data.code ?? code;
+            }
+          } catch {
+            // Network/server error — fall back to starter code.
           }
-        } catch {
-          // Network/server error — fall back to starter code.
         }
 
         return {
-          id: f.tag || f.name.replace(/\.[^/.]+$/, ''),
-          name: f.name,
+          id: f.id || f.tag || effectiveName.replace(/\.[^/.]+$/, ''),
+          name: effectiveName,
           tag: f.tag,
           path: filePath,
           language: lang,
           code,
+          starterCodeByLanguage,
         };
       }));
 
@@ -693,8 +788,13 @@ export default function CNLabWorkspace() {
 
       setFiles(filesFromQuestion);
       dirtyFileIdsRef.current = new Set();
-      if (filesFromQuestion.length > 0) {
-        setActiveFileId(filesFromQuestion[0].id);
+
+      const restoredActiveFile = remembered?.activeFileName
+        ? filesFromQuestion.find(f => f.name === remembered.activeFileName)
+        : null;
+      const nextActiveId = restoredActiveFile?.id ?? filesFromQuestion[0]?.id;
+      if (nextActiveId) {
+        setActiveFileId(nextActiveId);
       }
 
       const autoMap = {};
@@ -702,6 +802,8 @@ export default function CNLabWorkspace() {
         if (f.tag) autoMap[f.tag] = f.path;
       });
       setTagToFileMap(autoMap);
+
+      lastHydratedQuestionIdRef.current = activeQuestion.id;
       };
 
       loadFilesForQuestion();
@@ -1151,59 +1253,88 @@ export default function CNLabWorkspace() {
   };
 
 
+  const getFileBoilerplate = (file, targetLanguage = file?.language) => {
+    const questionFile = questions[activeQuestionIdx]?.files?.find((candidate) => {
+      const candidateBase = String(candidate.name || '').replace(/\.(c|java)$/i, '');
+      const fileBase = String(file?.name || '').replace(/\.(c|java)$/i, '');
+      return (file?.tag && candidate.tag === file.tag) || candidateBase === fileBase;
+    });
+    const precode = questionFile?.precode;
+    if (typeof precode === 'string') {
+      return targetLanguage === 'c' ? precode : '';
+    }
+    return precode?.[targetLanguage] ?? file?.starterCodeByLanguage?.[targetLanguage] ?? '';
+  };
+
   const updateFileLanguage = async (fileId, newLang) => {
     if (timeLocked) return;
-    const newExt = newLang === 'java' ? 'java' : 'c';
     const file = files.find(f => f.id === fileId);
-    if (!file) return;
+    if (!file || file.language === newLang) return;
 
+    // Language selection is deliberately NOT a file rename. Renaming moves
+    // C source into a .java file (or vice versa), which is both misleading
+    // and destructive after a student has started work. Instead, C and Java
+    // keep independent files/drafts with the same base name.
+    const newExt = newLang === 'java' ? 'java' : 'c';
     const baseName = file.name.replace(/\.[^/.]+$/, '');
     const newName = `${baseName}.${newExt}`;
-    const oldPath = file.path;
     const dir = file.path ? file.path.split('/').slice(0, -1).join('/') : currentWorkingDir;
     const newPath = file.path
       ? file.path.split('/').slice(0, -1).concat(newName).join('/')
       : newName;
 
-    if (newPath === oldPath) return;
+    // Persist the source-language draft before loading the target language.
+    // This makes C → Java → C restore the student's C edits exactly.
+    await saveFile(file);
 
-    // A file with this exact name may already exist in the container (e.g.
-    // an earlier server.java written before a reload, while server.c is
-    // currently open). The backend's rename is a plain `mv`, which would
-    // silently overwrite it — so confirm that's actually what's wanted first.
-    const canProceed = await confirmOverwriteIfNeeded(dir, newName, file.name);
-    if (!canProceed) return;
+    const existingTargetCode = await fetchExistingFileIfPresent(dir, newName);
+    const nextCode = existingTargetCode ?? getFileBoilerplate(file, newLang);
+    const nextFile = {
+      ...file,
+      language: newLang,
+      name: newName,
+      path: newPath,
+      code: nextCode,
+      starterCodeByLanguage: {
+        ...(file.starterCodeByLanguage || {}),
+        c: getFileBoilerplate(file, 'c'),
+        java: getFileBoilerplate(file, 'java'),
+      },
+    };
 
     setFiles(prevFiles =>
       prevFiles.map(f =>
         f.id === fileId
-          ? { ...f, language: newLang, name: newName, path: newPath }
+          ? nextFile
           : f
       )
     );
     setTagToFileMap((prev) => {
       const next = { ...prev };
       if (file.tag) next[file.tag] = newPath;
-      for (const [tag, mappedPath] of Object.entries(next)) {
-        if (mappedPath === oldPath) next[tag] = newPath;
-      }
       return next;
     });
+    setLanguage(newLang);
 
-    try {
-      await fetch(`${API_BASE}/api/rename-file`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          oldPath,
-          newPath,
-          sessionId: getCurrentLabSession(),
-        }),
-        credentials: 'include',
-      });
-    } catch (err) {
-      console.error('Failed to rename file in container:', err);
+    // Create/update the target-language file immediately, so its boilerplate
+    // is durable even if the student switches back before autosave fires.
+    await saveFile(nextFile);
+  };
+
+  const resetFileToBoilerplate = async (fileId) => {
+    if (timeLocked) return;
+    const file = files.find((candidate) => candidate.id === fileId);
+    const boilerplate = getFileBoilerplate(file);
+    if (!file || typeof boilerplate !== 'string') {
+      alert('No boilerplate is available for this file and language.');
+      return;
     }
+    if (!window.confirm(`Reset ${file.name} to the teacher-provided ${file.language === 'java' ? 'Java' : 'C'} boilerplate? Your current ${file.language} code will be replaced.`)) return;
+
+    const resetFile = { ...file, code: boilerplate };
+    setFiles((previous) => previous.map((candidate) => candidate.id === fileId ? resetFile : candidate));
+    dirtyFileIdsRef.current.delete(fileId);
+    await saveFile(resetFile);
   };
 
   const activeFile = files.find(f => f.id === activeFileId) || files[0];
@@ -1348,9 +1479,38 @@ export default function CNLabWorkspace() {
   }, [authReady]);
 
 
+  useEffect(() => {
+    const activeQuestion = questions?.[activeQuestionIdx];
+    if (!activeQuestion || activeQuestion.id === 'free_coding') return;
+    if (checkedPassedQuestionIdsRef.current.has(activeQuestion.id)) return;
+    checkedPassedQuestionIdsRef.current.add(activeQuestion.id);
+
+    axios.get(`${API_BASE}/api/submission/fetch`, {
+      params: { questionId: activeQuestion.id, sessionId: getCurrentLabSession() },
+    }).then((res) => {
+      const hasAcceptedSubmission = Array.isArray(res.data) && res.data.some(s => s.status === 'Accepted');
+      if (hasAcceptedSubmission) {
+        setPassedQuestionIds((prev) => (
+          prev.has(activeQuestion.id) ? prev : new Set(prev).add(activeQuestion.id)
+        ));
+      }
+    }).catch(() => {
+      // Non-fatal — worst case the button just doesn't show "Re-submit" yet;
+      // it'll self-correct the next time this question becomes active.
+      checkedPassedQuestionIdsRef.current.delete(activeQuestion.id);
+    });
+  }, [questions, activeQuestionIdx]);
+
   const handleSubmit = async () => {
     if (timeLocked) return null;
-    return submitQuestion(questions[activeQuestionIdx], { autoSubmitted: false, useActiveFiles: true });
+    const activeQuestion = questions[activeQuestionIdx];
+    if (activeQuestion && passedQuestionIds.has(activeQuestion.id)) {
+      const proceed = window.confirm(
+        "You've already passed all test cases for this question. Submit again anyway?"
+      );
+      if (!proceed) return null;
+    }
+    return submitQuestion(activeQuestion, { autoSubmitted: false, useActiveFiles: true });
   };
 
   const submitQuestion = async (question, { autoSubmitted = false, useActiveFiles = false } = {}) => {
@@ -1377,11 +1537,14 @@ export default function CNLabWorkspace() {
       if (!useActiveFiles) {
         effectiveTagMap = {};
         filteredFiles = await Promise.all((question.files || []).map(async (f) => {
-          const filePath = `${LABUSER_HOME}/${f.name}`;
-          let code = f.precode || '';
+          const lang = f.name?.endsWith('.java') ? 'java' : 'c';
+          const effectiveName = /\.(c|java)$/i.test(f.name || '') ? f.name : `${f.name}.${lang}`;
+          const filePath = `${LABUSER_HOME}/${effectiveName}`;
+          const precode = f.precode;
+          let code = typeof precode === 'string' ? precode : (precode?.[lang] || precode?.c || '');
           try {
             const response = await axios.get(`${API_BASE}/api/file/read-file`, {
-              params: { cwd: LABUSER_HOME, filename: f.name, sessionId: getCurrentLabSession() },
+              params: { cwd: LABUSER_HOME, filename: effectiveName, sessionId: getCurrentLabSession() },
             });
             if (response.data?.exists) {
               code = response.data.code ?? code;
@@ -1391,10 +1554,10 @@ export default function CNLabWorkspace() {
           }
           if (f.tag) effectiveTagMap[f.tag] = filePath;
           return {
-            id: f.tag || f.name,
-            name: f.name,
+            id: f.tag || effectiveName,
+            name: effectiveName,
             path: filePath,
-            language: f.name?.endsWith('.java') ? 'java' : 'c',
+            language: lang,
             code,
           };
         }));
@@ -1464,6 +1627,11 @@ export default function CNLabWorkspace() {
       }
 
       const statusLabel = totalCount > 0 && correctCount === totalCount ? 'All test cases passed' : `${correctCount}/${totalCount} test cases passed`;
+      if (totalCount > 0 && correctCount === totalCount) {
+        setPassedQuestionIds((prev) => (
+          prev.has(question.id) ? prev : new Set(prev).add(question.id)
+        ));
+      }
       setSubmissionRefreshTrigger((n) => n + 1);
       if (!autoSubmitted) alert(`Submitted successfully. ${statusLabel}`);
       return { questionId: question.id, statusLabel };
@@ -1674,6 +1842,7 @@ export default function CNLabWorkspace() {
               files={files}
               activeFileId={activeFileId}
               setActiveFileId={setActiveFileId}
+              questionId={question?.id}
               updateCode={updateCode}
               addNewFile={addNewFile}
               onRun={handleRun}
@@ -1684,6 +1853,8 @@ export default function CNLabWorkspace() {
               saveStatus={saveStatus}
               renameFile={renameFile}
               updateFileLanguage={updateFileLanguage}
+              resetFileToBoilerplate={resetFileToBoilerplate}
+              alreadyPassed={question && passedQuestionIds.has(question.id)}
               onSave={saveActiveFile}
             />
           )}
@@ -1791,6 +1962,7 @@ export default function CNLabWorkspace() {
                   activeFileId={activeFileId}
                   setActiveFileId={setActiveFileId}
                   activeFile={activeFile}
+                  questionId={question?.id}
                   updateCode={updateCode}
                   addNewFile={addNewFile}
                   openFile={openFile}
@@ -1809,10 +1981,12 @@ export default function CNLabWorkspace() {
                   saveStatus={saveStatus}
                   renameFile={renameFile}
                   updateFileLanguage={updateFileLanguage}
+                  resetFileToBoilerplate={resetFileToBoilerplate}
                   tags={tags}
                   tagToFileMap={tagToFileMap}
                   setTagToFileMap={setTagToFileMap}
                   isFreeCoding={isFreeCoding}
+                  alreadyPassed={question && passedQuestionIds.has(question.id)}
                   onSave={saveActiveFile}
                 />
               </Panel>

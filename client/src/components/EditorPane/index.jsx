@@ -72,12 +72,12 @@ const editorOverrideServices = { clipboardService };
 
 export default function EditorPane({
   language,
-  setLanguage,
   files,
   setFiles,
   activeFileId,
   setActiveFileId,
   activeFile,
+  questionId,
   updateCode,
   addNewFile,
   openFile,
@@ -95,10 +95,12 @@ export default function EditorPane({
   saveStatus,
   renameFile,
   updateFileLanguage,
+  resetFileToBoilerplate,
   tags,
   tagToFileMap,
   setTagToFileMap,
   isFreeCoding,
+  alreadyPassed,
   onSave,
 }) {
   const [fontSize, setFontSize] = useState(14);
@@ -172,7 +174,6 @@ export default function EditorPane({
             onChange={(e) => {
               const newLang = e.target.value;
               updateFileLanguage(activeFile.id, newLang);
-              setLanguage(newLang);
             }}
             className="text-sm border border-gray-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
@@ -182,6 +183,16 @@ export default function EditorPane({
               </option>
             ))}
           </select>
+
+          <button
+            type="button"
+            onClick={() => resetFileToBoilerplate?.(activeFile?.id)}
+            disabled={!activeFile}
+            className="px-2 py-1 text-sm font-medium text-amber-700 border border-amber-300 rounded-lg hover:bg-amber-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Replace this language's code with the teacher-provided boilerplate"
+          >
+            Reset Code
+          </button>
 
           {/* Settings */}
           <div className="relative">
@@ -265,6 +276,19 @@ export default function EditorPane({
       <div className="flex-1 relative min-h-[100px]">
         {activeFile ? (
           <MonacoEditor
+            // Without a distinct `path`, @monaco-editor/react reuses ONE
+            // shared text model for every file, and switching files just
+            // diffs/replaces that shared model's content as a normal,
+            // undoable edit (see its executeEdits + pushUndoStop call).
+            // That means every file switch — and every question switch —
+            // piles onto a single undo stack for the lifetime of the page,
+            // so enough Ctrl+Z eventually walks back through unrelated
+            // files/questions and dumps their old content into whatever tab
+            // is currently open. Scoping `path` by question + file gives
+            // each file its own model with its own independent undo
+            // history (and, as a bonus, restores that file's own cursor/
+            // undo state when you switch back to it — same as a real IDE).
+            path={`${questionId ?? 'unknown-question'}::${activeFile.path || activeFile.id}`}
             language={activeFile.language}
             theme={theme}
             value={activeFile.code}
@@ -304,6 +328,7 @@ export default function EditorPane({
         onEvaluate={onEvaluate}
         isEvaluating={isEvaluating}
         isFreeCoding={isFreeCoding}
+        alreadyPassed={alreadyPassed}
       />
 
       {/* Click outside to close settings */}

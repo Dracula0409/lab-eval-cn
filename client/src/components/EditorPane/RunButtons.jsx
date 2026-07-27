@@ -18,7 +18,8 @@ export default function RunButtons({
   showTerminal,
   setShowTerminal,
   onEvaluate,
-  isFreeCoding
+  isFreeCoding,
+  alreadyPassed
 }) {
 
   return (
@@ -99,12 +100,17 @@ export default function RunButtons({
                 : 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:from-indigo-600 hover:to-purple-700 hover:shadow-xl hover:scale-105 active:scale-95'
               }
             `}
-            title={!activeFile ? 'No file to submit' : 'Submit solution'}
+            title={!activeFile ? 'No file to submit' : alreadyPassed ? 'You already passed all test cases — submit again anyway' : 'Submit solution'}
           >
             {isSubmitting ? (
               <>
                 <ClockIcon className="w-4 h-4 animate-spin" />
                 <span>Submitting...</span>
+              </>
+            ) : alreadyPassed ? (
+              <>
+                <CheckCircleIcon className="w-4 h-4" />
+                <span>Re-submit</span>
               </>
             ) : (
               <>
