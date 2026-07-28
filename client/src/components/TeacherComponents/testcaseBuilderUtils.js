@@ -1,3 +1,5 @@
+import { v4 as uuidv4 } from 'uuid';
+
 export const PAYLOAD_TYPES = [
   ['string', 'String (ASCII)'],
   ['character', 'Character (ASCII)'],
@@ -112,12 +114,14 @@ export function byteOffsetAt(text, characterOffset) {
   return String(text).slice(0, characterOffset).length;
 }
 
+const createBuilderId = () => globalThis.crypto?.randomUUID?.() ?? uuidv4();
+
 const defaultCommunication = (direction = '') => ({
-  id: crypto.randomUUID(), direction, type: 'string', elementType: 'string', value: '', skippedBytes: [],
+  id: createBuilderId(), direction, type: 'string', elementType: 'string', value: '', skippedBytes: [],
 });
 
 export function newBuilderCase(direction = '') {
-  return { id: crypto.randomUUID(), communications: [defaultCommunication(direction)] };
+  return { id: createBuilderId(), communications: [defaultCommunication(direction)] };
 }
 
 function decodeText(hex) {
@@ -154,7 +158,7 @@ export function testcasesToBuilder(testcases, direction = '') {
         return { ...defaultCommunication(directionKey), direction: directionKey, ...decoded, skippedBytes };
       });
     });
-    return { id: crypto.randomUUID(), communications: communications.length ? communications : [defaultCommunication(direction)] };
+    return { id: createBuilderId(), communications: communications.length ? communications : [defaultCommunication(direction)] };
   });
   return cases.length ? cases : [newBuilderCase(direction)];
 }
