@@ -29,7 +29,7 @@ function START_TCPDUMP()
 	### REMEMBER THE NAMES OF THE FILES THEY ARE ASSIGNING
 	 
 	> $3
-	tcpdump --immediate-mode -i lo $1 "port $2" -nn -A -w "$3" 2>/dev/null &
+	tcpdump --immediate-mode -i lo $1 "port $2" -nn -A -w "$3"  &
 	TCPDUMP_PID=$!
 	#=- echo "the pid of tcpdump is : $TCPDUMP_PID"
 	
@@ -60,7 +60,7 @@ function END_TCPDUMP()
 	#=- echo "===>KILLING TCPDUMP"
 
 	if [[ $TCPDUMP_PID == 0 ]];then
-		#=- echo -e "\033[36mTCPDUMP IS NOT STARTED\033[0m"
+		echo -e "\033[36mTCPDUMP IS NOT STARTED\033[0m"
 		return 0
 	fi
 
@@ -72,8 +72,8 @@ function END_TCPDUMP()
 
 	sleep 1
 	#=- echo "parsing contents of $TCPDUMP_FILENAME  TO transfer.log && hex_transfer.log  "
-	tcpdump -nn -A -r $TCPDUMP_FILENAME > transfer.log  2>/dev/null
-	tcpdump -nn -r $TCPDUMP_FILENAME -xx > transfer.hex 2>/dev/null
+	tcpdump -nn -A -r $TCPDUMP_FILENAME > transfer.log  
+	tcpdump -nn -r $TCPDUMP_FILENAME -xx > transfer.hex 
 	
 	#=- echo "TCPDUMP KILLED SUCCESSFULLY<==="
 }
@@ -94,7 +94,7 @@ function EVALUATE()
 	bash modi_2.sh "$Qi" "$1" 
 
 	sleep 1
-	#=- echo "started evaluating and correction"
+	echo "started evaluating and correction"
 	
 	if [[ $# -eq 2 ]];then
 
@@ -138,7 +138,7 @@ function CLEAR_ALL()
 
         #=- echo "clearing all the programs and process!!!"
 
-        END_TCPDUMP "transfer.log"
+        END_TCPDUMP #"transfer.log"
 
 	for i in ${!coprocPids[@]};
 	do
@@ -486,11 +486,12 @@ function COMPILE_RUN()
         	
 		elif [[ "$1" == *.java ]];then
 
+			parent_dir="${1%/*}"
 			javac "$1"
 		
 		fi
 
-        if [[ $? == 1 ]];then
+        if [[ $? -eq 1 ]];then
                 echo -e "\033[31mCOMPILATION ERROR IN $1 \033[0m"
                 CLEAR_ALL
                 exit 101
@@ -565,14 +566,27 @@ function COMPILE_RUN()
 
 }
 
+function FORCE_KILL_PORT()
+{
+	kill -9 $(lsof -t -i :"$1")
+	echo "FORCE KILL $1 DONE"
+}
+
 function WAIT_PORT()
 {
+
+	FORCE_KILL_PORT "$2"
+
+	# arg 1 protocol
+	# arg 2 port numebr
+
+	
 	#=- echo "checking from wait_port with prto:$1 for port:$2"
 	s=$(PORT_AVAIL "$1" $2)
 	#=- echo "|	status PORT_AVAIL:{ $s }	|" 
 	if [[ "$s" == "01" || "$s" == "0A" ]];then
 		
-		printf ">>> \033[36mTHE PORT:$2 IS ALREADY IN USE\033[0m <<<"
+		print ">>> \033[36mTHE PORT:$2 IS ALREADY IN USE\033[0m <<<"
 		CLEAR_ALL
 		exit 301
 	elif [[ "$s" == "05" || "$s" == "06" ]];then
@@ -645,10 +659,10 @@ function ISALIVE()
 	kill_status=$?
 	#=- echo "kill_status : $kill_status"
 	if [[ $kill_status == 0 ]];then
-		#=- echo -e "PROGRAM : $1 IS \033[36mALIVE\033[0m"
+		echo -e "PROGRAM : $1 IS \033[36mALIVE\033[0m"
 		return 1
 	else
-		#=- echo -e "PROGRAM : $1 IS \033[36mDEAD\033[0m"
+		echo -e "PROGRAM : $1 IS \033[36mDEAD\033[0m"
 		return 0
 	fi
 }
@@ -656,11 +670,11 @@ function SAFE_KILL()
 {
 
 	if [[ "$#" != "1" ]];then
-		#=- echo -e "\033[36mnot enough arguments SAFE_KILL <program_name> $1\033[0m"
+		echo -e "\033[36mnot enough arguments SAFE_KILL <program_name> $1\033[0m"
 		return 0
 	fi
 
-	#=- echo "------- KILLING $1 --------" 
+	echo "------- KILLING $1 --------" 
 
 	# $1 name of the program to kill safely
 
@@ -671,16 +685,20 @@ function SAFE_KILL()
         eval "exec ${coprocFDs[$1]}>&-"
 	#=- echo "STATUS : $?"
 
-	eval "exec ${coprocReadFDs[$1]}>&-"
+		eval "exec ${coprocReadFDs[$1]}>&-"
 	#=- echo "STATUS : $?"
 	#=- echo " status of closing coproc FD $?"
 
                 # Killing the program
-        kill -2  "${programPids[$1]}"
-        #=- echo "status of killing the program : $?"
-	wait ${programPids[$1]}
-        #=- echo "WAIT : $?"
 
+        if [[ "${programPids[$1]}" != "" ]];then
+        
+        	kill -2  "${programPids[$1]}"
+        	echo "status of killing the program : $?"
+			wait ${programPids[$1]}
+        	echo "WAIT : $?"
+
+		fi
 	       # killing the coproc itself
         kill -TERM "-${coprocPids[$1]}"
         #=- echo "status of killing the coproc : $?"
@@ -690,10 +708,11 @@ function SAFE_KILL()
 	#=- echo "SUB PROCESS : $$"
 
 
-	#=- echo "----------KILLED $1 SUCCESSFULLY---------"
+	echo "----------KILLED $1 SUCCESSFULLY---------"
 	
 #	ls /proc/$$/fd/
 }
+
 
 
 function START_CHECK_PERSISTENT()

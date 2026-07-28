@@ -18,6 +18,7 @@ def print_c(content, status):
 
 def print_ascii(hex_string):
 
+    result = ""
     n = len(hex_string) // 2
     for i in range(0, n):
 
@@ -26,8 +27,10 @@ def print_ascii(hex_string):
         char_byte = int(left_nibble, 16) * 16  + int(right_nibble, 16)
         
         char_byte = chr(char_byte)
-
+        result += char_byte
         print(char_byte, end="")
+
+    return result
 
 # Validate arguments
 if len(sys.argv) != 4:
@@ -88,9 +91,11 @@ if question_id not in testcases or testcase_id not in testcases[question_id]:
 
 pairs = testcases[question_id][testcase_id]
 
+#print(pairs)
 # ----------- Parse hex_transfer.log -----------
 entries = []
 with open("hex_transfer.log") as f:
+    print("HEX TRANSFER FILE OPENED")
     for line in f:
         line = line.strip()
         if not line:
@@ -120,7 +125,7 @@ with open("hex_transfer.log") as f:
             continue
 
         entries.append((src_id, dst_id, direction, payload))
-        #print(f"^{entries}^")
+        # print(f"^{entries}^")
 
 # ----------- Convert testcase data to HEX (old behaviour) -----------
 def to_hex_variants(data):
@@ -187,6 +192,7 @@ def compare_hex_with_pattern(actual_hex, expected_hex, pattern):
 
 # ----------- Evaluation Logic -----------
 row = [student_id, f"{question_id}.{testcase_id}"]
+obtained_list = []
 
 # Initialize dynamic columns (2 per communication)
 for _ in pairs:
@@ -228,18 +234,21 @@ for idx, item in enumerate(pairs):
     
     for e_src, e_dst, e_dir, e_data in entries:
         if e_dir == direction and e_src == src_logical and e_dst == dst_logical:
-            actual = e_data.lower()
+            actual = e_data.lower() # here actual represents the data from the hex_transfer.log
             matched = False
-
+            obtained_list.append(actual)
+            
             # --------- CASE 1: pattern [0] -> old behaviour (int/float/double/string/etc.) ---------
             if pattern == [0]:                
                 if isinstance(expected_data, (int, float, bool)):
                     matched = (actual == hex_big) or (actual == hex_little)
-                elif isinstance(expected_data, str):
+                elif isinstance(expected_data, str):                # here expected_data is from the testcase.json
                     # Original "string with printable-next-byte" heuristic
-                    print("Expected data: ", expected_data)
-                    print("Obtained data: ", end="")
-                    print_ascii(actual)
+                    # print("Expected data: ", expected_data)
+                    # print("Obtained data: ", end="")
+                    # print_ascii(actual)
+
+                    
                     print("")
                     if actual.startswith(hex_big):
                         next_index = len(hex_big)
@@ -266,9 +275,11 @@ for idx, item in enumerate(pairs):
             else:
                 # For struct/array checks we expect a raw hex literal like "0x68656C6C6F0000000000"
                 if isinstance(expected_data, str) and expected_data.startswith(("0x", "0X")):
-                    print("obtained :");print_ascii(actual)
+                    print("obtained :"); print_ascii(actual)
                     expected_hex = expected_data[2:].replace(" ", "").lower()
-                    print("expected :");print_ascii(expected_hex)
+                    print("expected :", end="");print_ascii(expected_hex)
+
+                    
                     matched = compare_hex_with_pattern(actual, expected_hex, pattern)
                 else:
                     print(f"Pattern {pattern} used with non-hex data {expected_data}; "
@@ -281,10 +292,21 @@ for idx, item in enumerate(pairs):
                 row[2 + 2*idx + 1] = "correct"
                 print_c(testcase_id, "correct")
                 matched_pair = True
+                obtained_list = []
                 break
 
     if not matched :
+
+
+        for obj in obtained_list:
+            print("\033[33mOBTAINED :\033[0m"); print_ascii(obj)
+            print("")
+        print("\033[36mEXPECTED :\033[0m");print(expected_data)
+
         print_c(testcase_id, "wrong")
+
+
+        obtained_list = []
 
 # ----------- Append to evaluated.csv -----------
 eval_file = f"{student_id}_evaluated.csv"
