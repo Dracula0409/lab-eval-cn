@@ -104,7 +104,7 @@ RUN for user in labuser networklab; do \
     done
 
 # Only allow tcpdump and sysctl via sudo for networklab (but no sudo access to anything else)
-RUN echo "networklab ALL=(ALL) NOPASSWD: /usr/bin/tcpdump, /sbin/sysctl, /usr/sbin/sysctl, /bin/sysctl, /usr/bin/sysctl" > /etc/sudoers.d/networklab_limited && \
+RUN echo "networklab ALL=(ALL) NOPASSWD: /usr/bin/tcpdump, /sbin/sysctl, /usr/sbin/sysctl, /bin/sysctl, /usr/bin/sysctl, /usr/bin/lsof, /usr/bin/kill" > /etc/sudoers.d/networklab_limited && \
     chmod 440 /etc/sudoers.d/networklab_limited
 
 # Fixed CN evaluation framework (generic scripts — not per-question)
