@@ -568,7 +568,7 @@ function COMPILE_RUN()
 
 function FORCE_KILL_PORT()
 {
-	kill -9 $(sudo lsof -t -i :"$1")
+	sudo kill -9 $(sudo lsof -t -i :"$1")
 	echo "FORCE KILL $1 DONE"
 }
 
