@@ -27,7 +27,7 @@ export default function TeacherBatches() {
       .then((res) => {
         if (!['faculty', 'admin'].includes(res.data.user.role)) navigate('/teacher-login');
       })
-      .catch(() => navigate('/teacher-login'));
+      .catch((err) => { if (err.response?.status === 401) navigate('/teacher-login'); });
   }, [navigate]);
 
   const handleLogout = async () => {

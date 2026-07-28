@@ -154,8 +154,36 @@ function createLabuserConnection(sshPort) {
   });
 }
 
+// How often the server pings each open terminal socket. Sending a ping frame
+// is real traffic on the connection, which is what actually matters here: it
+// resets the idle timer on any NAT/firewall/proxy sitting between the
+// browser and this server, which would otherwise silently kill a socket that
+// has gone quiet (e.g. nobody typing for a while). Without this, the
+// connection can die with no close frame on either side, and the terminal
+// only notices once it tries to write and fails.
+const HEARTBEAT_INTERVAL_MS = 25_000;
+
 export function initSSHWebSocket(server) {
   const wss = new WebSocketServer({ noServer: true });
+
+  const heartbeat = setInterval(() => {
+    wss.clients.forEach((ws) => {
+      if (ws.isAlive === false) {
+        // Didn't respond to the previous ping — treat as dead and force a
+        // close so the client's onclose/reconnect logic kicks in promptly
+        // instead of waiting on a TCP-level timeout that may never fire.
+        return ws.terminate();
+      }
+      ws.isAlive = false;
+      try {
+        ws.ping();
+      } catch (_) {
+        /* socket already closing */
+      }
+    });
+  }, HEARTBEAT_INTERVAL_MS);
+
+  wss.on('close', () => clearInterval(heartbeat));
 
   server.on('upgrade', (request, socket, head) => {
     const { pathname, query } = url.parse(request.url, true);
@@ -169,6 +197,13 @@ export function initSSHWebSocket(server) {
 
   wss.on('connection', async (ws, request) => {
     const { terminalId = 'main', sessionId: requestedSessionId = null } = ws.query;
+
+    // Browsers answer WS ping frames with a pong automatically — no
+    // client-side change needed for this to work.
+    ws.isAlive = true;
+    ws.on('pong', () => {
+      ws.isAlive = true;
+    });
 
     try {
       const user = await getUserFromRequest(request);

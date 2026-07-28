@@ -94,7 +94,7 @@ export default function TeacherUpload() {
         }
         setTeacher(res.data.user);
       })
-      .catch(() => navigate('/teacher-login'));
+      .catch((err) => { if (err.response?.status === 401) navigate('/teacher-login'); });
   }, [navigate]);
 
   const [searchParams] = useSearchParams();
