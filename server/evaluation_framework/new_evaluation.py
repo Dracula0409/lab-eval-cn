@@ -243,41 +243,53 @@ for idx, item in enumerate(pairs):
                 if isinstance(expected_data, (int, float, bool)):
                     matched = (actual == hex_big) or (actual == hex_little)
                 elif isinstance(expected_data, str):                # here expected_data is from the testcase.json
-                    # Original "string with printable-next-byte" heuristic
-                    # print("Expected data: ", expected_data)
-                    # print("Obtained data: ", end="")
-                    # print_ascii(actual)
-
-                    
-                    print("")
-                    if actual.startswith(hex_big):
-                        next_index = len(hex_big)
-                        if next_index + 2 <= len(actual):
-                            next_byte = actual[next_index:next_index+2]
-                            if next_byte in PRINTABLE_HEX:
-                                matched = False
+                    # Guided testcase creation stores every payload as a raw
+                    # hexadecimal literal, including ordinary strings.  [0]
+                    # means the full captured payload must match that value.
+                    # Keep the legacy UTF-8 string behaviour below for old
+                    # questions saved before the guided builder existed.
+                    if expected_data.startswith(("0x", "0X")):
+                        # print("obtained :"); print(actual)
+                        expected_hex = expected_data[2:].replace(" ", "").lower()
+                        # print("expected :", end="");print(expected_hex)
+                        expected_little = bytes.fromhex(expected_hex)[::-1].hex()
+                        matched = (
+                            actual.startswith(expected_hex) or
+                            actual.endswith(expected_hex) or
+                            actual.startswith(expected_little) or
+                            actual.endswith(expected_little)
+                        )
+                    else:
+                        # Original "string with printable-next-byte" heuristic
+                        print("")
+                        if actual.startswith(hex_big):
+                            next_index = len(hex_big)
+                            if next_index + 2 <= len(actual):
+                                next_byte = actual[next_index:next_index+2]
+                                if next_byte in PRINTABLE_HEX:
+                                    matched = False
+                                else:
+                                    matched = True
                             else:
                                 matched = True
-                        else:
-                            matched = True
-                    elif actual.startswith(hex_little):
-                        next_index = len(hex_little)
-                        if next_index + 2 <= len(actual):
-                            next_byte = actual[next_index:next_index+2]
-                            if next_byte in PRINTABLE_HEX:
-                                matched = False
+                        elif actual.startswith(hex_little):
+                            next_index = len(hex_little)
+                            if next_index + 2 <= len(actual):
+                                next_byte = actual[next_index:next_index+2]
+                                if next_byte in PRINTABLE_HEX:
+                                    matched = False
+                                else:
+                                    matched = True
                             else:
                                 matched = True
-                        else:
-                            matched = True
 
             # --------- CASE 2: pattern with reads/skips -> struct/array hex path ---------
             else:
                 # For struct/array checks we expect a raw hex literal like "0x68656C6C6F0000000000"
                 if isinstance(expected_data, str) and expected_data.startswith(("0x", "0X")):
-                    print("obtained :"); print_ascii(actual)
+                    #print("obtained :"); print_ascii(actual)
                     expected_hex = expected_data[2:].replace(" ", "").lower()
-                    print("expected :", end="");print_ascii(expected_hex)
+                    #print("expected :", end="");print_ascii(expected_hex)
 
                     
                     matched = compare_hex_with_pattern(actual, expected_hex, pattern)
@@ -301,7 +313,12 @@ for idx, item in enumerate(pairs):
         for obj in obtained_list:
             print("\033[33mOBTAINED :\033[0m"); print_ascii(obj)
             print("")
-        print("\033[36mEXPECTED :\033[0m");print(expected_data)
+        print("\033[36mEXPECTED :\033[0m");
+        if isinstance(expected_data, str) and expected_data.startswith(("0x", "0X")):
+            print_ascii(expected_data[2:].replace(" ", "").lower())
+        else:
+            print(expected_data)
+        print("")
 
         print_c(testcase_id, "wrong")
 

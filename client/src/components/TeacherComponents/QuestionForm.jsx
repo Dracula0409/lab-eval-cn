@@ -5,6 +5,7 @@ import { FormSection, FormLabel, ErrorMessage } from '../FormComponents';
 import TiptapEditor from '../TiptapEditor';
 import Editor from "@monaco-editor/react";
 import { PlusIcon } from '@heroicons/react/24/outline';
+import TestcaseBuilder from './TestcaseBuilder';
 
 const SUPPORTED_LANGUAGES = [
   { key: 'c', label: 'C' },
@@ -227,25 +228,11 @@ const QuestionForm = ({
         </div>
 
         <div className="mb-4">
-          <FormLabel>testcases.json content</FormLabel>
-          <Controller
-            name="testcases"
-            control={control}
-            render={({ field }) => (
-              <Editor
-                height="200px"
-                language="json"
-                value={typeof field.value === 'string' ? field.value : JSON.stringify(field.value || {}, null, 2)}
-                onChange={(v) => {
-                  try {
-                    field.onChange(JSON.parse(v || '{}'));
-                  } catch {
-                    field.onChange(v);
-                  }
-                }}
-                options={{ minimap: { enabled: false }, fontSize: 13 }}
-              />
-            )}
+          <FormLabel>Testcase builder</FormLabel>
+          <TestcaseBuilder
+            testcases={watchedValues.testcases}
+            socketConfig={watchedValues.testcaseSocketConfig}
+            setValue={setValue}
           />
         </div>
 
@@ -286,6 +273,7 @@ const QuestionForm = ({
                   maxMarks: data.maxMarks || 15,
                   files: normalizeFiles(data.files || []),
                   testcases: data.testcases || {},
+                  testcaseSocketConfig: data.testcaseSocketConfig || { clients: 1, servers: 1 },
                   input: data.input || '',
                   evalScript: data.evalScript || data.evalscripts?.['nice.sh'] || defaultSampleEvalScript,
                 });

@@ -39,9 +39,16 @@ const initialQuestion = {
     },
   ],
   testcases: {
-    testcase1: [[0], { c1_to_s1: 'Hi' }, [0], { s1_to_c1: 'Hi' }],
-    testcase2: [[0], { c1_to_s1: 'OpenAI' }, [0], { s1_to_c1: 'OpenAI' }],
+    testcase1: [
+      [[0], { client1_to_server1: '0x4869' }],
+      [[0], { server1_to_client1: '0x4869' }],
+    ],
+    testcase2: [
+      [[0], { client1_to_server1: '0x4f70656e4149' }],
+      [[0], { server1_to_client1: '0x4f70656e4149' }],
+    ],
   },
+  testcaseSocketConfig: { clients: 1, servers: 1 },
   input: 'Hi\nOpenAI\n',
   evalScript: `START_TCPDUMP "tcp" "\${SERVER_PORT[0]}" "transfer.pcap"\nsleep 2\n\nCOMPILE_RUN "\$TAG_s1" myserver \${SERVER_PORT[0]}\nCHECK_PORT "127.0.0.1:\${SERVER_PORT[0]}" "0.0.0.0:0000" myserver tcp LISTEN\n\nfor tc in 1 2; do\n  COMPILE_RUN "\$TAG_c1" myclient \${CLIENT_PORT[0]}\n  INPUT myclient input \${tc} 1\n  sleep 2\n  END_TCPDUMP\n  EVALUATE tcp \${tc}\n  START_TCPDUMP "tcp" "\${SERVER_PORT[0]}" "transfer.pcap"\n  sleep 1\ndone\n\nCLEAR_ALL`,
 };

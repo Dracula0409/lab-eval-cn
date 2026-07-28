@@ -568,6 +568,11 @@ function COMPILE_RUN()
 
 function FORCE_KILL_PORT()
 {
+	pid=$(sudo lsof -t -i :"$1")
+	if [[ "$pid" == "" ]];then
+		echo "NO PROCESS IS USING THE PORT $1"
+		return 0
+	fi
 	sudo kill -9 $(sudo lsof -t -i :"$1")
 	echo "FORCE KILL $1 DONE"
 }
@@ -739,3 +744,58 @@ function END_CHECK_PERSISTENT()
 
 	#=- echo "=== END OF CHECK PERSISTANT ==="
 }
+
+function SLEEP()
+{
+	# this funtion is a wrapper for sleep only
+
+	if [[ "$#" != 1 ]];then
+		sleep 1
+	else
+		sleep $1
+	fi
+}
+
+function PORT_RANGE_SET()
+{
+	# this is to set the emphermal port range of the OS
+
+	#=== start setting the port $1 ================
+	
+	sudo sysctl -w net.ipv4.ip_local_port_range="$1 $2"
+
+	### this is the sudo command check the permission are okay
+
+	read  -a arr <<< "$(cat /proc/sys/net/ipv4/ip_local_port_range)"
+
+	if [[ "${arr[0]}" == "$1" && "${arr[1]}" == "$2" ]];then
+		echo -e "\033[32mport set { OK } suucessfully\033[0m <==="
+		return 0
+	else
+		echo -e "\033[31mPORT SET { NOT }\033[0m"
+		return 1
+	fi
+
+}
+function PORT_RANGE_RESET()
+{
+	#=== start REsetting the port range ================
+
+	sudo sysctl -w net.ipv4.ip_local_port_range="32768 60999"
+
+	### this is the sudo command check for permission in the OS
+
+	read  -a arr <<< "$(cat /proc/sys/net/ipv4/ip_local_port_range)"
+
+	if [[ "${arr[0]}" == "32768" && "${arr[1]}" == "60999" ]];then
+		echo -e "\033[32mport REset { OK } sucessfully\033[0m <==="
+		return 0
+	# elif [[ $((${arr[1]} - ${arr[0]})) -gt 1000 ]];then
+	# 	echo -e "\033[33mport RESETTING"
+	# 	exit 1
+	else
+		echo -e "\033[31m FATAL ERROR : PORT RESET { NOT } \033[0m"
+		return 1
+	fi	
+}
+	

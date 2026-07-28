@@ -60,6 +60,12 @@ const CNQuestionSchema = new mongoose.Schema(
     questionKey: { type: String, default: "q1" },
     files: [fileSchema],
     testcases: { type: mongoose.Schema.Types.Mixed, required: true },
+    // Socket counts drive the teacher's guided testcase builder. Directions
+    // are intentionally independent from code-file tags.
+    testcaseSocketConfig: {
+      clients: { type: Number, default: 1, min: 0 },
+      servers: { type: Number, default: 1, min: 0 },
+    },
     input: { type: String, default: "" },
     evalScript: { type: String, required: true },
   },
