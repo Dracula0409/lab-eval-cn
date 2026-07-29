@@ -38,7 +38,9 @@ const sessions = {}; // session socket key => { conn, stream, ws, userId, sessio
 export function closeStudentSocketsForConnection(connectionId) {
   Object.entries(sessions).forEach(([socketKey, session]) => {
     if (session.connectionId !== connectionId) return;
-    try { session.ws.close(4001, 'Session disconnected by teacher'); } catch (_) {}
+    session.ended = true;
+    if (session.detachTimer) clearTimeout(session.detachTimer);
+    try { session.ws?.close(4001, 'Session disconnected by teacher'); } catch (_) {}
     try { session.stream?.end(); } catch (_) {}
     try { session.conn?.end(); } catch (_) {}
     delete sessions[socketKey];
@@ -163,6 +165,115 @@ function createLabuserConnection(sshPort) {
 // only notices once it tries to write and fails.
 const HEARTBEAT_INTERVAL_MS = 25_000;
 
+// How long a shell is kept alive, unattached, after its WebSocket drops
+// (network blip, tab backgrounded, brief Wi-Fi loss, etc.) before it's torn
+// down for real. This is what stops a dropped socket from killing whatever
+// the student had running (a server blocked on accept(), a long test, etc.):
+// if they reconnect within this window, they resume the exact same shell
+// instead of getting a fresh one.
+const DETACH_GRACE_PERIOD_MS = 45_000;
+
+// Cap on how much output we buffer for a detached (no ws attached) session,
+// so a chatty or runaway process can't grow this unbounded while nobody's
+// listening. Measured in characters of terminal output.
+const MAX_BUFFERED_OUTPUT_CHARS = 200_000;
+
+function bufferSessionOutput(session, chunk) {
+  session.outputBuffer = (session.outputBuffer || '') + chunk;
+  if (session.outputBuffer.length > MAX_BUFFERED_OUTPUT_CHARS) {
+    session.outputBuffer = session.outputBuffer.slice(-MAX_BUFFERED_OUTPUT_CHARS);
+  }
+}
+
+// Send terminal output to whichever ws is currently attached; if none is
+// (the socket dropped but the shell is still in its grace period), buffer it
+// instead of dropping it on the floor so a reconnect can replay it.
+function emitSessionData(session, output) {
+  if (session.ws && session.ws.readyState === session.ws.OPEN) {
+    session.ws.send(JSON.stringify({ type: 'data', data: output }));
+  } else {
+    bufferSessionOutput(session, output);
+  }
+}
+
+function clearDetachTimer(session) {
+  if (session.detachTimer) {
+    clearTimeout(session.detachTimer);
+    session.detachTimer = null;
+  }
+}
+
+// Called once the shell process itself has actually ended (student typed
+// `exit`, SSH connection died for real, etc.) — as opposed to just the
+// WebSocket dropping. There's nothing to reattach to anymore, so clean up
+// immediately rather than waiting out the grace period.
+function endSession(session) {
+  if (session.ended) return;
+  session.ended = true;
+  clearDetachTimer(session);
+  emitEndMessage(session);
+  try { session.conn.end(); } catch (_) { /* already closed */ }
+  if (sessions[session.socketKey] === session) delete sessions[session.socketKey];
+  Session.updateOne(
+    { userId: session.userId, sessionId: session.sessionId },
+    { $pull: { activeSockets: session.terminalId } }
+  ).catch((err) => console.error('[SSH WS] Failed to clear activeSockets on session end:', err.message));
+}
+
+function emitEndMessage(session) {
+  if (session.ws && session.ws.readyState === session.ws.OPEN) {
+    session.ws.send(JSON.stringify({ type: 'end' }));
+  }
+}
+
+// A WebSocket dropped, but the shell may still be perfectly healthy — start
+// (or restart) the grace-period countdown before tearing the shell down.
+function scheduleDetachCleanup(session) {
+  clearDetachTimer(session);
+  session.detachTimer = setTimeout(() => {
+    if (sessions[session.socketKey] !== session) return; // already reattached or replaced
+    console.log(`[SSH WS] No reconnect within ${DETACH_GRACE_PERIOD_MS / 1000}s for ${session.socketKey}; tearing down shell`);
+    try { session.stream.end(); } catch (_) { /* already closed */ }
+    endSession(session);
+  }, DETACH_GRACE_PERIOD_MS);
+}
+
+// Wires a (possibly new) ws up to an existing shell session — used both for
+// the very first connection and for a reconnect that lands inside the grace
+// period. Replays any output the shell produced while detached.
+function attachWsToSession(ws, session) {
+  clearDetachTimer(session);
+  session.ws = ws;
+
+  if (session.outputBuffer) {
+    ws.send(JSON.stringify({ type: 'data', data: session.outputBuffer }));
+    session.outputBuffer = '';
+  }
+
+  ws.on('message', (message) => {
+    try {
+      const { type, data, cols, rows } = JSON.parse(message);
+      if (type === 'input') {
+        session.stream.write(data);
+      } else if (type === 'resize') {
+        session.stream.setWindow(rows, cols, 600, 800);
+      }
+    } catch (err) {
+      console.error('[WS] Invalid message format:', err);
+    }
+  });
+
+  ws.on('close', () => {
+    // If this session has since been reattached to a newer ws, or force-
+    // closed elsewhere (teacher revocation, student exiting the lab), this
+    // stale ws's close is a no-op — that path already did its own cleanup.
+    if (session.ended || sessions[session.socketKey] !== session || session.ws !== ws) return;
+    console.warn(`[SSH WS] ${session.socketKey} disconnected; keeping shell alive for ${DETACH_GRACE_PERIOD_MS / 1000}s in case of reconnect`);
+    session.ws = null;
+    scheduleDetachCleanup(session);
+  });
+}
+
 export function initSSHWebSocket(server) {
   const wss = new WebSocketServer({ noServer: true });
 
@@ -215,9 +326,25 @@ export function initSSHWebSocket(server) {
       const userId = user.user_id;
       const connectionId = request.studentConnection?.sessionId;
       const { sshPort, sessionId } = await ensureSessionContainer(userId, requestedSessionId);
+      const socketKey = `${userId}:${sessionId}:${terminalId}`;
+
+      // Reconnecting within the grace period after a dropped socket: reuse
+      // the still-running shell instead of starting a fresh one, so
+      // whatever the student had running survives the blip.
+      const existing = sessions[socketKey];
+      if (existing && !existing.ended) {
+        if (existing.ws && existing.ws.readyState === existing.ws.OPEN) {
+          // A second connection came in while the old one still looks live
+          // (e.g. a duplicate tab). Take over; the old socket's close
+          // handler will see it's no longer the session's ws and no-op.
+          try { existing.ws.close(); } catch (_) { /* already closing */ }
+        }
+        attachWsToSession(ws, existing);
+        return;
+      }
 
       let conn;
-      
+
       try {
         conn = await createLabuserConnection(sshPort);
 
@@ -232,69 +359,27 @@ export function initSSHWebSocket(server) {
           if (err) {
             return ws.send(JSON.stringify({ type: 'error', message: 'SSH Shell Error' }));
           }
-            stream.stderr?.on('data', (data) => {
-              if (ws.readyState === ws.OPEN) {
-                // Send stderr data as well for complete output
-                const errorOutput = data.toString('utf8');
-                ws.send(JSON.stringify({ type: 'data', data: errorOutput }));
-              }
-            });            
-            
-            ws.on('message', (message) => {
-              try {
-                const { type, data, cols, rows } = JSON.parse(message);
 
-                if (type === 'input') {
-                  // // Handle Ctrl+C properly by sending SIGINT
-                  // if (data === '\u0003') { // Ctrl+C character
-                  //   stream.write(data);
-                  //   // Don't automatically kill other processes - let Ctrl+C handle it naturally
-                  // } else {
-                  //   stream.write(data);
-                  // }
-                  stream.write(data);
-                } else if (type === 'resize') {
-                  stream.setWindow(rows, cols, 600, 800);
-                }
-              } catch (err) {
-                console.error('[WS] Invalid message format:', err);
-              }
-            });
-          const socketKey = `${userId}:${sessionId}:${terminalId}`;
-          sessions[socketKey] = { conn, stream, ws, userId, sessionId, terminalId, connectionId };
+          const session = {
+            conn, stream, ws, userId, sessionId, terminalId, connectionId, socketKey,
+            outputBuffer: '', detachTimer: null, ended: false,
+          };
+          sessions[socketKey] = session;
 
-          // Handle incoming data from SSH
           stream.on('data', (data) => {
-            if (ws.readyState === ws.OPEN) {
-              const output = data.toString('utf8');
-              ws.send(JSON.stringify({ type: 'data', data: output }));
-            }
+            emitSessionData(session, data.toString('utf8'));
           });
 
           stream.stderr?.on('data', (data) => {
-            if (ws.readyState === ws.OPEN) {
-              // Send stderr data as well for complete output
-              const errorOutput = data.toString('utf8');
-              ws.send(JSON.stringify({ type: 'data', data: errorOutput }));
-            }
-          });            
+            emitSessionData(session, data.toString('utf8'));
+          });
 
-          const cleanup = async () => {
-            stream.end();
-            conn.end();
-            delete sessions[socketKey];
+          // The shell process itself ending (student typed `exit`, the SSH
+          // channel died for real) — distinct from the ws just dropping.
+          // Nothing to reattach to here, so clean up right away.
+          stream.on('close', () => endSession(session));
 
-            if (ws.readyState === ws.OPEN) {
-              ws.send(JSON.stringify({ type: 'end' }));
-            }
-
-            await Session.updateOne(
-              { userId, sessionId },
-              { $pull: { activeSockets: terminalId } }
-            );
-          };
-
-          ws.on('close', cleanup);
+          attachWsToSession(ws, session);
         });
       } catch (err) {
         if (conn) conn.end();
@@ -373,6 +458,8 @@ export async function stopSessionContainer(userId, requestedSessionId) {
 
   for (const [socketKey, entry] of Object.entries(sessions)) {
     if (entry.userId === userId && entry.sessionId === sessionId) {
+      entry.ended = true;
+      if (entry.detachTimer) clearTimeout(entry.detachTimer);
       try {
         entry.ws?.close?.();
       } catch (_) {

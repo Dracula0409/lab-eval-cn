@@ -10,6 +10,7 @@ import FileSelectorModal from '../components/EditorPane/fileSelectorModal';
 import ResizeHandle from '../components/shared/ResizeHandle';
 import { useIsMobile } from '../components/utils/useIsMobile';
 import { summarizeResults } from '../components/utils/testcaseHelper';
+import { fetchWithRetry } from '../components/utils/fetchWithRetry';
 import { InformationCircleIcon } from '@heroicons/react/24/outline';
 import { API_BASE } from '../config';
 import StudentConnectionHeartbeat from '../components/StudentConnectionHeartbeat';
@@ -1539,6 +1540,13 @@ export default function CNLabWorkspace() {
   const submitQuestion = async (question, { autoSubmitted = false, useActiveFiles = false } = {}) => {
     if (!question || question.id === 'free_coding') return null;
 
+    // One key per submit attempt (not per HTTP retry) — lets the server
+    // recognize a retried save as the same attempt instead of recording it
+    // as a second submission if an earlier response got lost in transit.
+    const clientRequestId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
     const expectedTags = useActiveFiles ? tags : getTagsFromQuestion(question);
     const tagError = useActiveFiles
       ? getTagAssignmentError(expectedTags, tagToFileMap, files)
@@ -1625,7 +1633,7 @@ export default function CNLabWorkspace() {
       const correctCount = results.length > 0 ? passedFromResults : 0;
       const totalCount = results.length > 0 ? results.length : testcaseCount;
 
-      const submitDbRes = await fetch(`${API_BASE}/api/submission/db`, {
+      const submitDbRes = await fetchWithRetry(`${API_BASE}/api/submission/db`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1640,6 +1648,7 @@ export default function CNLabWorkspace() {
           evaluationResults: results,
           evalError: results.length === 0 ? (evalRes?.stderr?.trim() || null) : null,
           autoSubmitted,
+          clientRequestId,
         }),
         credentials: 'include',
       });

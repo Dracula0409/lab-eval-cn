@@ -14,6 +14,20 @@ dotenv.config();
 // Connect to MongoDB
 connectDB();
 
+// Node kills the whole process on an unhandled promise rejection by default
+// (and always has for a thrown exception outside any handler). With ~50
+// students' terminal WebSockets all served by this one process, that means
+// one unguarded rejection anywhere in the codebase disconnects everyone
+// simultaneously, not just the request that caused it. Log and survive
+// instead — a single bad request shouldn't take the whole lab down.
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL-GUARD] Unhandled promise rejection (process kept alive):', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL-GUARD] Uncaught exception (process kept alive):', err);
+});
+
 const app = express();
 const server = http.createServer(app);
 

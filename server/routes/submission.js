@@ -79,6 +79,7 @@ router.post('/db', requireAuth, async (req, res) => {
       sessionId: requestedSessionId,
       moduleId,
       autoSubmitted = false,
+      clientRequestId = null,
     } = req.body;
     const userId = req.user.user_id;
 
@@ -92,19 +93,41 @@ router.post('/db', requireAuth, async (req, res) => {
       sessionId = session.sessionId;
     }
 
-    const submission = await Submission.create({
-      userId,
-      questionId,
-      sessionId,
-      moduleId,
-      sourceCode,
-      language,
-      passedCount,
-      totalTestCases,
-      evaluationResults,
-      evalError,
-      autoSubmitted,
-    });
+    // If this exact attempt was already saved (a retry landed after the
+    // original response was lost in transit), hand back that same
+    // submission instead of creating a second row for one Submit click.
+    if (clientRequestId) {
+      const already = await Submission.findOne({ userId, clientRequestId });
+      if (already) {
+        return res.json({ success: true, submissionId: already._id });
+      }
+    }
+
+    let submission;
+    try {
+      submission = await Submission.create({
+        userId,
+        questionId,
+        sessionId,
+        moduleId,
+        sourceCode,
+        language,
+        passedCount,
+        totalTestCases,
+        evaluationResults,
+        evalError,
+        autoSubmitted,
+        clientRequestId,
+      });
+    } catch (err) {
+      // Duplicate key on (userId, clientRequestId): a concurrent retry beat
+      // us to it. Treat it the same as the pre-check above.
+      if (err?.code === 11000 && clientRequestId) {
+        const already = await Submission.findOne({ userId, clientRequestId });
+        if (already) return res.json({ success: true, submissionId: already._id });
+      }
+      throw err;
+    }
 
     res.json({ success: true, submissionId: submission._id });
   } catch (err) {

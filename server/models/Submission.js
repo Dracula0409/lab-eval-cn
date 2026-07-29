@@ -14,8 +14,16 @@ const submissionSchema = new mongoose.Schema({
   evalError: { type: String },
   score: { type: Number},
   isBestSubmission: { type: Boolean, default: false },
-  autoSubmitted: { type: Boolean, default: false }
+  autoSubmitted: { type: Boolean, default: false },
+  // Client-generated per-attempt key (not per HTTP retry — the same key is
+  // reused across retries of the same submit attempt). Lets the server
+  // recognize "I already saved this one" when a retry lands after an
+  // earlier attempt's response was lost, instead of creating a duplicate
+  // row for a single click of Submit.
+  clientRequestId: { type: String },
 }, {collection: 'submissions', timestamps: true });
+
+submissionSchema.index({ userId: 1, clientRequestId: 1 }, { unique: true, sparse: true });
 
 export default mongoose.model('Submission', submissionSchema);
 
