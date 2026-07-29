@@ -333,6 +333,7 @@ export function initSSHWebSocket(server) {
       // whatever the student had running survives the blip.
       const existing = sessions[socketKey];
       if (existing && !existing.ended) {
+        console.log(`[SSH WS] REATTACH: ${socketKey} rejoining existing shell (no new conn.shell() run)`);
         if (existing.ws && existing.ws.readyState === existing.ws.OPEN) {
           // A second connection came in while the old one still looks live
           // (e.g. a duplicate tab). Take over; the old socket's close
@@ -343,6 +344,7 @@ export function initSSHWebSocket(server) {
         return;
       }
 
+      console.log(`[SSH WS] NEW SHELL: ${socketKey} has no existing session — starting a fresh conn.shell()`);
       let conn;
 
       try {
