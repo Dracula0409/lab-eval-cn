@@ -28,6 +28,20 @@ RUN apt-get update && apt-get install -y \
 
 RUN apt-get update && apt-get install -y acl && apt-get clean
 
+# -------------------------------------------------------------------
+# Shared Java dependencies (available to all users)
+# -------------------------------------------------------------------
+
+ENV LAB_DEPS=/opt/dependencies
+
+RUN mkdir -p ${LAB_DEPS}
+
+COPY dependencies/ ${LAB_DEPS}/
+
+RUN chown -R root:root ${LAB_DEPS} && \
+    chmod 755 ${LAB_DEPS} && \
+    chmod 444 ${LAB_DEPS}/*.jar
+
 # Create labuser (least privileges, no sudo)
 RUN useradd -m -s /bin/bash labuser && \
     mkdir -p /home/labuser/.ssh && \

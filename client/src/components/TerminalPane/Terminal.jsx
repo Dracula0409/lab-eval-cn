@@ -430,7 +430,9 @@ const TerminalComponent = ({
             const className = justFilename
               .slice(justFilename.lastIndexOf('/') + 1)
               .replace(/\.java$/, '');
-            runCmd = `javac ${justFilename} && java -cp ${directory} ${className}`;
+              
+            const deps = '/opt/dependencies/*';
+            runCmd = `javac -cp "${deps}:." ${justFilename} && java -cp "${deps}:${directory}" ${className}`;
           } else if (language === 'c') {
             const exe = justFilename.replace(/\.c$/, '');
             runCmd = `gcc ${justFilename} -o ${exe} && ${exe}`;
