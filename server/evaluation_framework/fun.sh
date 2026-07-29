@@ -131,6 +131,8 @@ function FLUSH_ALL()
 	rm out_* 2>/dev/null
 	rm transfer.hex transfer.pcap 2>/dev/null 
 
+	rm *.class
+	
 }
 
 function CLEAR_ALL()
@@ -327,7 +329,7 @@ function get_ports()
 	for k in ${SERVER[@]};
         do
 		#=- echo "s : $k"
-                for key in "${Assigned_Ports[@]}";
+        for key in "${Assigned_Ports[@]}";
 		do
 			#=- echo "ap : $key"
 			if [[ "$k" == "${Assigned_Ports[$key]}" ]];then
@@ -487,7 +489,7 @@ function COMPILE_RUN()
 		elif [[ "$1" == *.java ]];then
 
 			parent_dir="${1%/*}"
-			javac "$1"
+			javac -cp "/opt/dependencies/*"  "$1"
 		
 		fi
 
@@ -526,7 +528,7 @@ function COMPILE_RUN()
 			file_name_java="${1%.java}"
 
 			echo "RUNNING JAVA FILE [ ${file_name_java} ]"
-	        coproc "coproc_${PROGRAMS_RAN_COUNT}" { java "${file_name_java}" > out_${PROGRAMS_RAN_COUNT}; }
+	        coproc "coproc_${PROGRAMS_RAN_COUNT}" { java -cp ".:/opt/dependencies/*" "${file_name_java}" > out_${PROGRAMS_RAN_COUNT}; }
 		
 		fi
 		#echo "[ EXIT CODE OF COPROC_${PROGRAMS_RAN_COUNT} : $? ]"
