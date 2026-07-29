@@ -23,6 +23,96 @@ function asciiBytes(value) {
   return Uint8Array.from([...text], (character) => character.charCodeAt(0));
 }
 
+export function parseEscapeSequence(value, index) {
+  const next = value[index + 1];
+  switch (next) {
+    case 'n': return { length: 2, text: '\n', label: '<\\n>' };
+    case 't': return { length: 2, text: '\t', label: '<\\t>' };
+    case 'b': return { length: 2, text: '\b', label: '<\\b>' };
+    case 'r': return { length: 2, text: '\r', label: '<\\r>' };
+    case 'a': return { length: 2, text: '\x07', label: '<\\a>' };
+    case 'f': return { length: 2, text: '\f', label: '<\\f>' };
+    case 'v': return { length: 2, text: '\v', label: '<\\v>' };
+    case "'": return { length: 2, text: "'", label: "<'\\'>" };
+    case '"': return { length: 2, text: '"', label: '<\\\">' };
+    case '?': return { length: 2, text: '?', label: '<\\?>' };
+    case '\\': return { length: 2, text: '\\', label: '\\' };
+    case '0': {
+      let octal = '';
+      let pos = index + 2;
+      while (pos < value.length && /[0-7]/.test(value[pos]) && octal.length < 2) {
+        octal += value[pos];
+        pos += 1;
+      }
+      const raw = `0${octal}`;
+      return { length: 2 + octal.length, text: String.fromCharCode(parseInt(raw, 8)), label: `<\\${raw}>` };
+    }
+    case 'x': {
+      let hex = '';
+      let pos = index + 2;
+      while (pos < value.length && /[0-9A-Fa-f]/.test(value[pos]) && hex.length < 2) {
+        hex += value[pos];
+        pos += 1;
+      }
+      if (!hex) return null;
+      return { length: 2 + hex.length, text: String.fromCharCode(parseInt(hex, 16)), label: `<\\x${hex}>` };
+    }
+    default:
+      return null;
+  }
+}
+
+export function parseEscapedPayloadText(value) {
+  let output = '';
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char !== '\\') {
+      output += char;
+      continue;
+    }
+    const next = value[index + 1];
+    if (next === undefined) {
+      output += '\\';
+      continue;
+    }
+    if (next === '\\') {
+      output += '\\';
+      index += 1;
+      continue;
+    }
+    const parsed = parseEscapeSequence(value, index);
+    if (!parsed) {
+      output += '\\';
+      continue;
+    }
+    output += parsed.text;
+    index += parsed.length - 1;
+  }
+  return output;
+}
+
+export function formatEscapedPayloadText(value) {
+  let output = '';
+  for (const character of String(value)) {
+    switch (character) {
+      case '\\': output += '\\\\'; break;
+      case '\r': output += '\\r'; break;
+      case '\n': output += '\\n'; break;
+      case '\t': output += '\\t'; break;
+      case '\b': output += '\\b'; break;
+      case '\f': output += '\\f'; break;
+      case '\v': output += '\\v'; break;
+      case '\0': output += '\\0'; break;
+      case '\x07': output += '\\a'; break;
+      case '"': output += '\\"'; break;
+      case "'": output += "\\'"; break;
+      case '?': output += '?'; break;
+      default: output += character; break;
+    }
+  }
+  return output;
+}
+
 function numberBytes(value, byteLength, setter) {
   const view = new DataView(new ArrayBuffer(byteLength));
   setter(view, Number(value));
@@ -31,9 +121,10 @@ function numberBytes(value, byteLength, setter) {
 
 function encodeOne(type, value) {
   switch (type) {
-    case 'string': return asciiBytes(value);
+    case 'string': return asciiBytes(parseEscapedPayloadText(value));
     case 'character': {
-      const chars = Array.from(String(value));
+      const parsedValue = parseEscapedPayloadText(value);
+      const chars = Array.from(String(parsedValue));
       if (chars.length !== 1) throw new Error('Character payloads must contain exactly one character.');
       return asciiBytes(chars[0]);
     }
@@ -129,7 +220,7 @@ function decodeText(hex) {
     const bytes = Uint8Array.from(hex.match(/../g) || [], (pair) => parseInt(pair, 16));
     if (Array.from(bytes).some((byte) => byte > 0x7f)) throw new Error('Not ASCII');
     const text = String.fromCharCode(...bytes);
-    return { type: 'string', value: text };
+    return { type: 'string', value: formatEscapedPayloadText(text) };
   } catch {
     return { type: 'hex', value: hex };
   }

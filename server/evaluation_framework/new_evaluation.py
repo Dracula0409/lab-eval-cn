@@ -313,9 +313,13 @@ for idx, item in enumerate(pairs):
         for obj in obtained_list:
             print("\033[33mOBTAINED :\033[0m"); print_ascii(obj)
             print("")
+            print("HEX :"); print(actual)
+            print("")
         print("\033[36mEXPECTED :\033[0m");
         if isinstance(expected_data, str) and expected_data.startswith(("0x", "0X")):
-            print_ascii(expected_data[2:].replace(" ", "").lower())
+            expected_hex = expected_data[2:].replace(" ", "").lower()
+            print_ascii(expected_hex)
+            print("HEX :");print(expected_hex)
         else:
             print(expected_data)
         print("")

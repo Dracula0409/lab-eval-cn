@@ -3,7 +3,7 @@ import Editor from '@monaco-editor/react';
 import { PlusIcon } from '@heroicons/react/24/outline';
 import {
   PAYLOAD_TYPES, buildReadSkipPattern, byteOffsetAt, encodePayload,
-  newBuilderCase, serializeBuilderCases, testcasesToBuilder,
+  newBuilderCase, serializeBuilderCases, testcasesToBuilder, parseEscapeSequence,
 } from './testcaseBuilderUtils';
 
 const stableJson = (value) => JSON.stringify(value || {});
@@ -178,6 +178,7 @@ function CommunicationCard({ communication, endpoints, skipEnabled, onSkipMode, 
           className="block mt-1 w-full font-mono text-sm border rounded p-2 focus:ring-2 focus:ring-indigo-400"
           placeholder="Enter ASCII payload"
         />
+        <EscapeSequencePreview value={communication.value} />
         {!!communication.skippedBytes?.length && <SkippedTextPreview value={communication.value} skippedBytes={communication.skippedBytes} />}
       </> : <textarea value={communication.value} onChange={(event) => onChange({ value: event.target.value })} rows={4} className="block mt-1 w-full font-mono text-sm border rounded p-2" placeholder={communication.type === 'custom' ? '[{"type":"integer","value":42},{"type":"string","value":"OK"}]' : communication.type.includes('Array') ? '[1, 2, 3]' : 'Enter payload'} />}
     </label>
@@ -192,6 +193,64 @@ function CommunicationCard({ communication, endpoints, skipEnabled, onSkipMode, 
     <div className={`mt-3 rounded p-2 font-mono text-xs break-all ${previewError ? 'bg-red-50 text-red-700' : 'bg-gray-50 text-gray-700'}`}>{previewError || preview}</div>
     <button type="button" onClick={onRemove} className="mt-3 text-sm text-red-600">Remove communication</button>
   </article>;
+}
+
+function getEscapePreviewParts(value = '') {
+  const parts = [];
+  let index = 0;
+
+  while (index < value.length) {
+    const character = value[index];
+    if (character !== '\\') {
+      parts.push({ text: character, highlight: false });
+      index += 1;
+      continue;
+    }
+
+    const next = value[index + 1];
+    if (next === undefined) {
+      parts.push({ text: '\\', highlight: false });
+      index += 1;
+      continue;
+    }
+
+    if (next === '\\') {
+      parts.push({ text: '\\', highlight: false });
+      index += 2;
+      continue;
+    }
+
+    const parsed = parseEscapeSequence(value, index);
+    if (!parsed) {
+      parts.push({ text: '\\', highlight: false });
+      index += 1;
+      continue;
+    }
+
+    if (parsed.label === '\\') {
+      parts.push({ text: '\\', highlight: false });
+    } else {
+      parts.push({ text: parsed.label, highlight: true });
+    }
+    index += parsed.length;
+  }
+
+  return parts;
+}
+
+function EscapeSequencePreview({ value = '' }) {
+  const parts = getEscapePreviewParts(value);
+  if (!parts.length) return null;
+  return <div className="mt-2 rounded border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+    <p className="mb-1 font-sans text-slate-600">Escape preview</p>
+    <div className="whitespace-pre-wrap break-words font-mono">
+      {parts.map((part, index) => part.highlight ? (
+        <span key={index} className="bg-sky-100 text-sky-800 rounded px-0.5">{part.text}</span>
+      ) : (
+        <span key={index}>{part.text}</span>
+      ))}
+    </div>
+  </div>;
 }
 
 function SkippedTextPreview({ value, skippedBytes = [] }) {
