@@ -713,7 +713,7 @@ export async function runAndEvaluate({
   const evalScriptBody = question.evalScript || '';
   const inputContent = question.input || '';
 
-  const niceScript = buildNiceScript({ evalScriptBody });
+  const niceScript = buildNiceScript({ evalScriptBody, questionKey });
   const testcasesJson = buildTestcasesJson(questionKey, testcases);
   const studentSh = buildStudentSh(userId, studentName);
 

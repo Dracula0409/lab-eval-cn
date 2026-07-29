@@ -14,6 +14,14 @@ import {
 } from '../components/TeacherComponents';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
+import { newEvalScriptState, blocksToEvalBody } from '../components/TeacherComponents/evalScriptBuilderUtils';
+
+const defaultStarterState = newEvalScriptState(2);
+const defaultEvalScript = blocksToEvalBody(defaultStarterState, [
+  { name: 'server', tag: 's1' },
+  { name: 'client', tag: 'c1' },
+]);
+
 // Updated initial question including evaluation settings and matchType in testCases
 const initialQuestion = {
   title: '',
@@ -50,7 +58,8 @@ const initialQuestion = {
   },
   testcaseSocketConfig: { clients: 1, servers: 1 },
   input: 'Hi\nOpenAI\n',
-  evalScript: `START_TCPDUMP "tcp" "\${SERVER_PORT[0]}" "transfer.pcap"\nsleep 2\n\nCOMPILE_RUN "\$TAG_s1" myserver \${SERVER_PORT[0]}\nCHECK_PORT "127.0.0.1:\${SERVER_PORT[0]}" "0.0.0.0:0000" myserver tcp LISTEN\n\nfor tc in 1 2; do\n  COMPILE_RUN "\$TAG_c1" myclient \${CLIENT_PORT[0]}\n  INPUT myclient input \${tc} 1\n  sleep 2\n  END_TCPDUMP\n  EVALUATE tcp \${tc}\n  START_TCPDUMP "tcp" "\${SERVER_PORT[0]}" "transfer.pcap"\n  sleep 1\ndone\n\nCLEAR_ALL`,
+  evalScript: defaultEvalScript,
+  evalScriptBlocks: defaultStarterState,
 };
 
 // Module form initial values

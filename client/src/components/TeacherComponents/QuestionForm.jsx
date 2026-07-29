@@ -6,6 +6,8 @@ import TiptapEditor from '../TiptapEditor';
 import Editor from "@monaco-editor/react";
 import { PlusIcon } from '@heroicons/react/24/outline';
 import TestcaseBuilder from './TestcaseBuilder';
+import EvalScriptBuilder from './EvalScriptBuilder';
+import { newEvalScriptState, blocksToEvalBody } from './evalScriptBuilderUtils';
 
 const SUPPORTED_LANGUAGES = [
   { key: 'c', label: 'C' },
@@ -31,23 +33,11 @@ function normalizeFiles(rawFiles) {
   });
 }
 
-const defaultSampleEvalScript = `START_TCPDUMP "tcp" "\${SERVER_PORT[0]}" "transfer.pcap"
-sleep 2
-
-COMPILE_RUN "\$TAG_s1" myserver \${SERVER_PORT[0]}
-CHECK_PORT "127.0.0.1:\${SERVER_PORT[0]}" "0.0.0.0:0000" myserver tcp LISTEN
-
-for tc in 1 2 3; do
-  COMPILE_RUN "\$TAG_c1" myclient \${CLIENT_PORT[0]}
-  INPUT myclient input \${tc} 1
-  sleep 2
-  END_TCPDUMP
-  EVALUATE tcp \${tc}
-  START_TCPDUMP "tcp" "\${SERVER_PORT[0]}" "transfer.pcap"
-  sleep 1
-done
-
-CLEAR_ALL`;
+const defaultStarterState = newEvalScriptState(2);
+const defaultSampleEvalScript = blocksToEvalBody(defaultStarterState, [
+  { name: 'server', tag: 's1' },
+  { name: 'client', tag: 'c1' },
+]);
 
 const QuestionForm = ({
   handleFormSubmit,
@@ -237,19 +227,23 @@ const QuestionForm = ({
         </div>
 
         <div>
-          <FormLabel>nice.sh body (question-specific flow only)</FormLabel>
-          <Controller
-            name="evalScript"
-            control={control}
-            render={({ field }) => (
-              <Editor
-                height="280px"
-                language="shell"
-                value={field.value || defaultSampleEvalScript}
-                onChange={field.onChange}
-                options={{ minimap: { enabled: false }, fontSize: 13 }}
-              />
-            )}
+          <FormLabel>Evaluation flow (nice.sh)</FormLabel>
+          <input type="hidden" {...register('evalScript')} />
+          <p className="text-sm text-gray-600 mb-2">
+            Drag blocks to mirror how you would run programs manually. The saved
+            {' '}
+            <code className="text-xs bg-gray-100 px-1 rounded">evalScript</code>
+            {' '}
+            is the flow body only; the full nice.sh boilerplate is added at run time.
+          </p>
+          <EvalScriptBuilder
+            evalScript={watchedValues.evalScript}
+            evalScriptBlocks={watchedValues.evalScriptBlocks}
+            questionKey={watchedValues.questionKey || 'q1'}
+            files={files}
+            testcaseSocketConfig={watchedValues.testcaseSocketConfig}
+            testcases={watchedValues.testcases}
+            setValue={setValue}
           />
         </div>
       </FormSection>
@@ -276,6 +270,7 @@ const QuestionForm = ({
                   testcaseSocketConfig: data.testcaseSocketConfig || { clients: 1, servers: 1 },
                   input: data.input || '',
                   evalScript: data.evalScript || data.evalscripts?.['nice.sh'] || defaultSampleEvalScript,
+                  evalScriptBlocks: data.evalScriptBlocks ?? null,
                 });
               } catch (err) {
                 alert('Invalid JSON: ' + err.message);

@@ -62,3 +62,91 @@ code {
   background: #334155 !important;
   color: #ffffff !important;
 }
+
+/* Scratch-style stacked eval flow blocks */
+.eval-scratch-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 6px 4px 8px;
+  min-height: 48px;
+  background-color: #eef0f5;
+  background-image: radial-gradient(circle, #d4d8e3 1px, transparent 1px);
+  background-size: 16px 16px;
+  border-radius: 8px;
+}
+
+.eval-scratch-block {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 34px;
+  padding: 4px 6px 4px 4px;
+  margin-top: -2px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
+  border-radius: 0 6px 6px 6px;
+}
+
+.eval-scratch-block:first-child {
+  margin-top: 0;
+  border-radius: 6px;
+}
+
+.eval-scratch-block:not(:first-child)::before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  left: 14px;
+  width: 14px;
+  height: 5px;
+  background: inherit;
+  border-radius: 3px 3px 0 0;
+  box-shadow: 0 -1px 0 rgba(0, 0, 0, 0.12);
+}
+
+.eval-scratch-block:not(:first-child)::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.eval-scratch-slot {
+  flex-shrink: 0;
+  height: 6px;
+  margin: 1px 0;
+  border-radius: 3px;
+  transition: height 0.1s, background 0.1s;
+}
+
+.eval-scratch-slot-active {
+  height: 10px;
+  background: #6366f1;
+  margin: 2px 0;
+}
+
+.eval-scratch-input {
+  font-size: 11px;
+  font-weight: 500;
+  color: #1e293b;
+  background: rgba(255, 255, 255, 0.92);
+  border: none;
+  border-radius: 10px;
+  padding: 1px 6px;
+  min-height: 20px;
+  max-width: 160px;
+}
+
+.eval-scratch-input-narrow {
+  max-width: 48px;
+  width: 48px;
+  text-align: center;
+}

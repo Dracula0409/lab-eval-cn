@@ -68,6 +68,8 @@ const CNQuestionSchema = new mongoose.Schema(
     },
     input: { type: String, default: "" },
     evalScript: { type: String, required: true },
+    // Scratch-like flow blocks for nice.sh; evalScript holds generated body text.
+    evalScriptBlocks: { type: mongoose.Schema.Types.Mixed, default: null },
   },
   { _id: false }
 );

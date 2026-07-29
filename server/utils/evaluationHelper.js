@@ -19,8 +19,86 @@ export function buildTagsSh(tagPaths = {}) {
   return lines.join("\n") + (lines.length ? "\n" : "");
 }
 
-export function buildNiceScript({ evalScriptBody }) {
-  return evalScriptBody || "echo 'No evalScript defined for this question'";
+const EVAL_FLOW_START = '# --- EVAL_FLOW_START ---';
+const EVAL_FLOW_END = '# --- EVAL_FLOW_END ---';
+
+function buildNiceShBoilerplate(questionKey = 'q1') {
+  return `#!/bin/bash
+#       ^
+#       |
+#     Do not forget to check the shebang for your host machine
+
+echo "The script       : $0"
+
+echo "server files $1"
+echo "client files $2"
+
+declare -a CLIENT
+declare -a SERVER
+
+if [[ $# == 3 ]];then
+	declare -a PROXY
+	IFS=' ' read -a PROXY  <<< "$3"
+fi
+
+IFS=' ' read -a SERVER <<< "$1"
+IFS=' ' read -a CLIENT <<< "$2"
+
+for setOfFiles in "$@";
+do
+	echo ">>>>$setOfFiles"
+done
+
+> connectionstatus.log
+> unitsep.log
+
+FILE_PATH=$2
+
+declare -i PROGRAMS_RAN_COUNT=0
+
+declare -A coprocPids
+declare -A coprocFDs
+declare -A coprocReadFDs
+declare -A programPids
+declare -A Assigned_Ports
+
+Qi="${questionKey}"
+
+source ./fun.sh
+source ./clientPorts.sh
+source ./serverPorts.sh
+source ./student.sh
+
+> \${student_id}_conn.csv
+> \${student_id}_status.csv
+> \${student_id}_evaluated.csv
+
+# THE STAFF SHOULD WRITE THE CODE HERE TO
+# DO THE EVALUATION IN RESPECT TO THIER NEED.
+# THIS SYSTEM IS COMPLETELY RELIABLE AND
+# FLEXIBLE.
+
+${EVAL_FLOW_START}
+`;
+}
+
+export function buildNiceScript({ evalScriptBody, questionKey = 'q1' }) {
+  const body = (evalScriptBody || '').trim();
+  if (!body) {
+    return `${buildNiceShBoilerplate(questionKey)}
+${EVAL_FLOW_END}
+
+echo "end of work"
+`;
+  }
+  if (body.startsWith('#!/bin/bash')) {
+    return body;
+  }
+  return `${buildNiceShBoilerplate(questionKey)}${body}
+${EVAL_FLOW_END}
+
+echo "end of work"
+`;
 }
 
 /**
