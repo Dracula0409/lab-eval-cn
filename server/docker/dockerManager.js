@@ -1,6 +1,7 @@
 import Docker from 'dockerode';
 import getPort from 'get-port';
 import dotenv from 'dotenv';
+import net from 'net';
 
 dotenv.config();
 
@@ -131,6 +132,40 @@ async function getAllocatedSshPorts() {
   return [...ports];
 }
 
+// Docker's container.start() resolving only means the entrypoint process
+// was launched — it says nothing about whether sshd inside has actually
+// bound port 22 yet. For a brand-new container (first "Free Coding" session,
+// or any first-ever session for a student) that gap can be a couple of
+// seconds, and a caller that immediately tries to SSH in during that window
+// gets ECONNREFUSED. connectSshWithRetry() covers small gaps, but its total
+// budget (~5s across 6 attempts) isn't generous enough for a cold start
+// under load, and *every* caller of ensureSessionContainer (the WS terminal,
+// save-file, evaluation) races this independently. Waiting here once, right
+// after the container comes up, means every caller downstream sees a
+// container whose SSH is already live — this is a plain TCP probe (no auth),
+// so it works before any SSH handshake would succeed.
+async function waitForSshPortReady(port, { timeoutMs = 20000, intervalMs = 300 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const open = await new Promise((resolve) => {
+      const socket = new net.Socket();
+      const done = (result) => {
+        socket.removeAllListeners();
+        socket.destroy();
+        resolve(result);
+      };
+      socket.setTimeout(1000);
+      socket.once('connect', () => done(true));
+      socket.once('timeout', () => done(false));
+      socket.once('error', () => done(false));
+      socket.connect(port, '127.0.0.1');
+    });
+    if (open) return true;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return false;
+}
+
 async function applyContainerAcl(container, containerName) {
   try {
     await runInContainer(container, `
@@ -190,7 +225,13 @@ export async function createContainerForUser(userId, requestedSessionId = null) 
 
       if (containerState === 'running') {
         await applyContainerAcl(existingContainer, containerName);
+        const sshPort = await resolvePublishedSshPort(existingContainer, existing);
+        const ready = await waitForSshPortReady(sshPort);
+        if (!ready) {
+          console.warn(`[Dockerode] sshd on ${containerName} (port ${sshPort}) didn't come up within the wait window; proceeding anyway`);
+        }
         console.log(`[Dockerode] Restarted container ${containerName}`);
+        return { containerName, volumeName, sshPort, sessionId };
       } else {
         throw new Error(`Container ${containerName} could not be started; state is ${containerState}`);
       }
@@ -263,6 +304,11 @@ async function createAndStartContainer(containerName, volumeName) {
 
   await container.start();
   await applyContainerAcl(container, containerName);
+
+  const ready = await waitForSshPortReady(sshPort);
+  if (!ready) {
+    console.warn(`[Dockerode] sshd on ${containerName} (port ${sshPort}) didn't come up within the wait window; proceeding anyway`);
+  }
   console.log(`[Dockerode] Started new container ${containerName} on port ${sshPort}`);
 
   return sshPort;

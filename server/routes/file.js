@@ -40,9 +40,18 @@ router.get('/read-file', requireAuth, async (req, res) => {
     exec(command, (err, stdout, stderr) => {
       if (err) {
         // Missing file is an expected, common outcome here (checking whether
-        // a rename target exists) — respond 404 rather than 200 so callers
+        // a rename target exists, or hydrating a fresh Free Coding file that
+        // has no on-disk copy yet) — respond 404 rather than 200 so callers
         // can't mistake this for success by only checking the body shape.
-        console.error('[Docker Read Error]', stderr || err.message);
+        // Log it quietly rather than as an error; only a failure that isn't
+        // just "file doesn't exist" (container down, permissions, etc.)
+        // deserves error-level logging.
+        const isMissingFile = /no such file or directory/i.test(stderr || err.message || '');
+        if (isMissingFile) {
+          console.log(`[Docker Read] ${fullPath} not found (expected — treating as no on-disk copy yet)`);
+        } else {
+          console.error('[Docker Read Error]', stderr || err.message);
+        }
         return res.status(404).json({ exists: false, code: null, error: stderr || 'File not found' });
       }
       res.json({ exists: true, code: stdout });

@@ -20,16 +20,33 @@ def print_ascii(hex_string):
 
     result = ""
     n = len(hex_string) // 2
-    for i in range(0, n):
+    i = 0
+    while (i < n):
 
+
+        if (i <= n-2 and hex_string[i*2:i*2+4] == "0d0a"):
+
+            print("\033[90m\\r\\n\033[0m", end="")
+            print("\r\n", end="")
+            i += 2
+            continue
+            
         left_nibble = hex_string[i*2]
         right_nibble= hex_string[i*2+1]
         char_byte = int(left_nibble, 16) * 16  + int(right_nibble, 16)
         
         char_byte = chr(char_byte)
         result += char_byte
-        print(char_byte, end="")
 
+        
+        if   (char_byte == '\r'):
+            print("\033[90m\\r\033[0m", end="")
+        elif (char_byte == '\n'):
+            print("\033[90m\\n\033[0m", end="")
+
+        i += 1    
+        print(char_byte, end="")
+    
     return result
 
 # Validate arguments
@@ -193,12 +210,15 @@ def compare_hex_with_pattern(actual_hex, expected_hex, pattern):
 # ----------- Evaluation Logic -----------
 row = [student_id, f"{question_id}.{testcase_id}"]
 obtained_list = []
+passed_list   = []
 
 # Initialize dynamic columns (2 per communication)
 for _ in pairs:
     row.append("fail")
     row.append("wrong")
 
+
+pair_count = 0
 for idx, item in enumerate(pairs):
     # Determine pattern (read/skip list) and communication dict
     # Supported forms:
@@ -207,6 +227,7 @@ for idx, item in enumerate(pairs):
     #   3) [[5,-5], { "client1_to_server1": "0x..." }]  -> pattern = [5,-5]
     pattern = [0]
     comm = None
+    pair_count += 1
     
     if isinstance(item, dict):
         comm = item
@@ -302,32 +323,35 @@ for idx, item in enumerate(pairs):
             row[2 + 2*idx] = "ok"
             if matched:
                 row[2 + 2*idx + 1] = "correct"
-                print_c(testcase_id, "correct")
+                print_c(testcase_id+"."+str(pair_count), "correct")
                 matched_pair = True
+                passed_list.append(actual)
                 obtained_list = []
                 break
 
     if not matched :
 
-
         for obj in obtained_list:
+
+            if obj in passed_list:
+                continue
             print("\033[33mOBTAINED :\033[0m"); print_ascii(obj)
             print("")
-            print("HEX :"); print(actual)
+            #print("HEX :"); print(obj)
             print("")
+            
         print("\033[36mEXPECTED :\033[0m");
         if isinstance(expected_data, str) and expected_data.startswith(("0x", "0X")):
             expected_hex = expected_data[2:].replace(" ", "").lower()
             print_ascii(expected_hex)
-            print("HEX :");print(expected_hex)
+            #print("HEX :");print(expected_hex)
         else:
             print(expected_data)
         print("")
 
-        print_c(testcase_id, "wrong")
-
-
+        print_c(testcase_id+"."+str(pair_count), "wrong")
         obtained_list = []
+
 
 # ----------- Append to evaluated.csv -----------
 eval_file = f"{student_id}_evaluated.csv"
