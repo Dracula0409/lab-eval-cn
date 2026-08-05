@@ -9,7 +9,20 @@ import {
 const stableJson = (value) => JSON.stringify(value || {});
 const safeCount = (value) => Math.max(0, Math.min(50, Number.parseInt(value, 10) || 0));
 
-export default function TestcaseBuilder({ testcases, socketConfig, setValue }) {
+function stringifyTestcasesFile(questionKey, cases) {
+  return JSON.stringify({ [questionKey || 'q1']: cases || {} }, null, 2);
+}
+
+function parseTestcasesFile(text, questionKey) {
+  const parsed = JSON.parse(text || '{}');
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('testcases.json must be a JSON object keyed by question ID.');
+  const keys = Object.keys(parsed);
+  const key = parsed[questionKey] !== undefined ? questionKey : keys[0] || questionKey || 'q1';
+  if (!parsed[key] || Array.isArray(parsed[key]) || typeof parsed[key] !== 'object') throw new Error(`Expected an object of testcases under "${key}".`);
+  return { parsed, questionKey: key, testcases: parsed[key] };
+}
+
+export default function TestcaseBuilder({ testcases, testcasesFile, questionKey, socketConfig, setValue }) {
   const sockets = { clients: safeCount(socketConfig?.clients ?? 1), servers: safeCount(socketConfig?.servers ?? 1) };
   const endpoints = useMemo(() => [
     ...Array.from({ length: sockets.clients }, (_, index) => `client${index + 1}`),
@@ -18,7 +31,7 @@ export default function TestcaseBuilder({ testcases, socketConfig, setValue }) {
   const defaultDirection = endpoints.length > 1 ? `${endpoints[0]}_to_${endpoints[1]}` : '';
   const [tab, setTab] = useState('builder');
   const [cases, setCases] = useState(() => testcasesToBuilder(testcases, defaultDirection));
-  const [jsonText, setJsonText] = useState(() => JSON.stringify(testcases || {}, null, 2));
+  const [jsonText, setJsonText] = useState(() => testcasesFile || stringifyTestcasesFile(questionKey, testcases));
   const [jsonError, setJsonError] = useState('');
   const [builderError, setBuilderError] = useState('');
   const [skipMode, setSkipMode] = useState({});
@@ -30,18 +43,20 @@ export default function TestcaseBuilder({ testcases, socketConfig, setValue }) {
     const signature = stableJson(testcases);
     if (signature === lastSignature.current) return;
     lastSignature.current = signature;
-    setJsonText(JSON.stringify(testcases || {}, null, 2));
+    setJsonText(testcasesFile || stringifyTestcasesFile(questionKey, testcases));
     setCases(testcasesToBuilder(testcases, defaultDirection));
-  }, [testcases, defaultDirection]);
+  }, [testcases, testcasesFile, questionKey, defaultDirection]);
 
   const publishCases = (next) => {
     try {
       const serialized = serializeBuilderCases(next);
       lastSignature.current = stableJson(serialized);
       setCases(next);
-      setJsonText(JSON.stringify(serialized, null, 2));
+      const file = stringifyTestcasesFile(questionKey, serialized);
+      setJsonText(file);
       setBuilderError('');
       setValue('testcases', serialized, { shouldDirty: true });
+      setValue('testcasesFile', file, { shouldDirty: true });
     } catch (error) {
       setCases(next);
       setBuilderError(error.message);
@@ -63,10 +78,14 @@ export default function TestcaseBuilder({ testcases, socketConfig, setValue }) {
 
   const useJsonInBuilder = () => {
     try {
-      const parsed = JSON.parse(jsonText || '{}');
-      lastSignature.current = stableJson(parsed);
-      setValue('testcases', parsed, { shouldDirty: true });
-      setCases(testcasesToBuilder(parsed, defaultDirection));
+      const result = parseTestcasesFile(jsonText, questionKey);
+      lastSignature.current = stableJson(result.testcases);
+      // Preserve the exact text typed by the teacher.  The builder is merely
+      // a best-effort view of that file, never a normalizer of it.
+      setValue('testcasesFile', jsonText, { shouldDirty: true });
+      setValue('testcases', result.testcases, { shouldDirty: true });
+      if (result.questionKey !== questionKey) setValue('questionKey', result.questionKey, { shouldDirty: true });
+      setCases(testcasesToBuilder(result.testcases, defaultDirection));
       setJsonError('');
       setTab('builder');
     } catch (error) {
@@ -81,10 +100,10 @@ export default function TestcaseBuilder({ testcases, socketConfig, setValue }) {
     </div>
 
     {tab === 'json' ? <div className="p-4">
-      <p className="text-sm text-gray-600 mb-3">Inspect or make a manual correction. Apply JSON before returning to the builder or saving the question.</p>
+      <p className="text-sm text-gray-600 mb-3">This is the complete saved <code>testcases.json</code>. Manual edits are authoritative; applying them updates the guided view.</p>
       <Editor height="360px" language="json" value={jsonText} onChange={(value) => { setJsonText(value ?? ''); setJsonError(''); }} options={{ minimap: { enabled: false }, fontSize: 13 }} />
       {jsonError && <p className="text-sm text-red-600 mt-2">{jsonError}</p>}
-      <button type="button" onClick={useJsonInBuilder} className="mt-3 px-3 py-2 rounded bg-indigo-600 text-white text-sm">Apply JSON to builder</button>
+      <button type="button" onClick={useJsonInBuilder} className="mt-3 px-3 py-2 rounded bg-indigo-600 text-white text-sm">Apply JSON</button>
     </div> : <div className="p-4 space-y-4">
       <div className="text-sm text-gray-600">
         First declare the sockets used by this question. Add communications in the order they should be observed. Every payload is saved as a hexadecimal literal; `[0]` reads the whole payload, and a selected skip range becomes a negative byte count.

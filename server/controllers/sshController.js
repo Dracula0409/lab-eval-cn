@@ -12,9 +12,7 @@ import EvaluationRun from '../models/EvaluationRun.js';
 import { getPooledConnection, evictPooledConnection } from '../utils/sshConnectionPool.js';
 import {
   EVAL_DIR,
-  buildNiceScript,
   buildStudentSh,
-  buildTestcasesJson,
   parseEvaluatedCsv,
   parseConnCsv,
   parseStatusCsv,
@@ -797,13 +795,12 @@ export async function runAndEvaluate({
   const question = await Question.findById(questionId).lean();
   if (!question) throw new Error(`Question ${questionId} not found`);
 
-  const questionKey = question.questionKey || 'q1';
-  const testcases = question.testcases || {};
-  const evalScriptBody = question.evalScript || '';
   const inputContent = question.input || '';
-
-  const niceScript = buildNiceScript({ evalScriptBody, questionKey });
-  const testcasesJson = buildTestcasesJson(questionKey, testcases);
+  const niceScript = question.niceScript;
+  const testcasesJson = question.testcasesFile;
+  if (!niceScript || !testcasesJson) {
+    throw new Error('This question has no saved nice.sh or testcases.json. Open and save it once in the teacher editor to migrate it.');
+  }
   const studentSh = buildStudentSh(userId, studentName);
 
   const conn = await createNetworklabConnection(session.sshPort);

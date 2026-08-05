@@ -52,6 +52,7 @@ const CATEGORY_COLORS = {
   Cleanup: 'border-rose-300 bg-rose-50',
   HTTP: 'border-emerald-300 bg-emerald-50',
   Grade: 'border-indigo-300 bg-indigo-50',
+  Advanced: 'border-slate-400 bg-slate-100',
   Teardown: 'border-slate-300 bg-slate-50',
 };
 
@@ -66,7 +67,8 @@ export function blockCategoryColor(type) {
     Process: '#f97316',
     Cleanup: '#f43f5e',
     HTTP: '#10b981',
-    Grade: '#6366f1',
+  Grade: '#6366f1',
+    Advanced: '#94a3b8',
     Teardown: '#64748b',
   };
   return map[entry?.category] || '#94a3b8';
@@ -113,8 +115,10 @@ function sanitizeBlock(block) {
   if (!block?.type) return null;
   if (block.type === 'reduce_port_timeout' || block.type === 'reset_port_timeout') return null;
   if (block.type === 'custom_bash') {
-    const line = String(block.line || '').trim();
-    if (!line || isBoilerplateLine(line) || line.startsWith('#')) return null;
+    // A newly inserted block is intentionally blank until the teacher types
+    // into it.  Do not treat normal shell commands (or comments) as
+    // boilerplate here: custom_bash is an explicit request to preserve them.
+    return { ...block, line: String(block.line || '') };
   }
   if (block.type === 'shell') return convertLegacyShellBlock(block);
   if (block.type === 'comment') return null;

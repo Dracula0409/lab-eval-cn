@@ -14,13 +14,23 @@ import {
 } from '../components/TeacherComponents';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
-import { newEvalScriptState, blocksToEvalBody } from '../components/TeacherComponents/evalScriptBuilderUtils';
+import { newEvalScriptState, blocksToEvalBody, buildFullNiceSh } from '../components/TeacherComponents/evalScriptBuilderUtils';
 
 const defaultStarterState = newEvalScriptState(2);
 const defaultEvalScript = blocksToEvalBody(defaultStarterState, [
   { name: 'server', tag: 's1' },
   { name: 'client', tag: 'c1' },
 ]);
+const defaultTestcases = {
+  testcase1: [
+    [[0], { client1_to_server1: '0x4869' }],
+    [[0], { server1_to_client1: '0x4869' }],
+  ],
+  testcase2: [
+    [[0], { client1_to_server1: '0x4f70656e4149' }],
+    [[0], { server1_to_client1: '0x4f70656e4149' }],
+  ],
+};
 
 // Updated initial question including evaluation settings and matchType in testCases
 const initialQuestion = {
@@ -46,19 +56,12 @@ const initialQuestion = {
       },
     },
   ],
-  testcases: {
-    testcase1: [
-      [[0], { client1_to_server1: '0x4869' }],
-      [[0], { server1_to_client1: '0x4869' }],
-    ],
-    testcase2: [
-      [[0], { client1_to_server1: '0x4f70656e4149' }],
-      [[0], { server1_to_client1: '0x4f70656e4149' }],
-    ],
-  },
+  testcases: defaultTestcases,
+  testcasesFile: JSON.stringify({ q1: defaultTestcases }, null, 2),
   testcaseSocketConfig: { clients: 1, servers: 1 },
   input: 'Hi\nOpenAI\n',
   evalScript: defaultEvalScript,
+  niceScript: buildFullNiceSh({ questionKey: 'q1', evalBody: defaultEvalScript }),
   evalScriptBlocks: defaultStarterState,
 };
 
@@ -319,6 +322,15 @@ export default function TeacherUpload() {
         moduleType: 'CNQuestion',
         lab: '123',
       };
+
+      // Older questions only have the guided-editor mirrors.  Migrate them in
+      // the browser on their next save so the API always receives full files.
+      if (!questionData.testcasesFile) {
+        questionData.testcasesFile = JSON.stringify({ [questionData.questionKey || 'q1']: questionData.testcases || {} }, null, 2);
+      }
+      if (!questionData.niceScript) {
+        questionData.niceScript = buildFullNiceSh({ questionKey: questionData.questionKey || 'q1', evalBody: questionData.evalScript || '' });
+      }
 
       delete questionData.precode;
       delete questionData.clientPrecode;

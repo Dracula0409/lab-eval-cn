@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseEscapedPayloadText } from './testcaseBuilderUtils.js';
+import { buildReadSkipPattern, byteOffsetAt, parseEscapedPayloadText } from './testcaseBuilderUtils.js';
 
 test('parses carriage return and newline escapes', () => {
   assert.equal(parseEscapedPayloadText('Hello\\rWorld'), 'Hello\rWorld');
@@ -21,4 +21,11 @@ test('parses full C-style escape sequences', () => {
   assert.equal(parseEscapedPayloadText('question\\?'), 'question?');
   assert.equal(parseEscapedPayloadText('hex\\x41'), 'hexA');
   assert.equal(parseEscapedPayloadText('octal\\012'), 'octal\n');
+});
+
+test('calculates skip ranges in decoded bytes, not escape-source characters', () => {
+  const value = 'A\\nBC';
+  assert.equal(byteOffsetAt(value, 1), 1);
+  assert.equal(byteOffsetAt(value, 3), 2); // A + decoded newline
+  assert.deepEqual(buildReadSkipPattern(4, [{ start: byteOffsetAt(value, 1), end: byteOffsetAt(value, 3) }]), [1, -1, 2]);
 });

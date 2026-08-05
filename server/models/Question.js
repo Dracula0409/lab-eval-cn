@@ -60,6 +60,10 @@ const CNQuestionSchema = new mongoose.Schema(
     questionKey: { type: String, default: "q1" },
     files: [fileSchema],
     testcases: { type: mongoose.Schema.Types.Mixed, required: true },
+    // The evaluator consumes these exact files.  `testcases`/`evalScript` are
+    // retained as compatibility data for the guided editors, but are never
+    // used by the backend to reconstruct the files at evaluation time.
+    testcasesFile: { type: String, default: '' },
     // Socket counts drive the teacher's guided testcase builder. Directions
     // are intentionally independent from code-file tags.
     testcaseSocketConfig: {
@@ -68,6 +72,7 @@ const CNQuestionSchema = new mongoose.Schema(
     },
     input: { type: String, default: "" },
     evalScript: { type: String, required: true },
+    niceScript: { type: String, default: '' },
     // Scratch-like flow blocks for nice.sh; evalScript holds generated body text.
     evalScriptBlocks: { type: mongoose.Schema.Types.Mixed, default: null },
   },

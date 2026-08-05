@@ -6,6 +6,7 @@ import {
   extractEvalBodyFromNiceSh,
   newBlock,
   newEvalScriptState,
+  sanitizeEvalScriptState,
   syncTestcaseSectionCount,
 } from './evalScriptBuilderUtils.js';
 
@@ -68,5 +69,10 @@ assert.ok(legacy.testCases[0].blocks.some((b) => b.type === 'compile_run' && b.a
 const synced = syncTestcaseSectionCount(newEvalScriptState(1), 3);
 assert.equal(synced.testCases.length, 3);
 assert.equal(synced.testCases[2].blocks.find((b) => b.type === 'evaluate')?.testcaseStart, '3');
+
+const custom = newEvalScriptState(1);
+custom.testCases[0].blocks.push({ ...newBlock('custom_bash'), line: 'echo "starting"\nexport FLAG=1' });
+assert.ok(sanitizeEvalScriptState(custom, 1).testCases[0].blocks.some((b) => b.type === 'custom_bash'));
+assert.match(blocksToEvalBody(custom, files), /echo "starting"\nexport FLAG=1/);
 
 console.log('evalScriptBuilderUtils.test.mjs: ok');

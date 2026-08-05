@@ -50,6 +50,7 @@ function setDragPayload(event, payload) {
 
 export default function EvalScriptBuilder({
   evalScript,
+  niceScript,
   evalScriptBlocks,
   questionKey,
   files,
@@ -63,15 +64,16 @@ export default function EvalScriptBuilder({
   );
   const [tab, setTab] = useState('blocks');
   const [state, setState] = useState(() => {
+    if (niceScript) return evalBodyToBlocks(extractEvalBodyFromNiceSh(niceScript) || niceScript, testcaseCount);
     if (evalScriptBlocks && typeof evalScriptBlocks === 'object') {
       return normalizeEvalScriptState(evalScriptBlocks, testcaseCount);
     }
     return evalBodyToBlocks(evalScript, testcaseCount);
   });
-  const [scriptText, setScriptText] = useState('');
+  const [scriptText, setScriptText] = useState(() => niceScript || buildFullNiceSh({ questionKey: questionKey || 'q1', evalBody: evalScript }));
   const [scriptError, setScriptError] = useState('');
   const activeSectionRef = useRef('tc-0');
-  const lastSignature = useRef(stableJson({ evalScript, evalScriptBlocks }));
+  const lastSignature = useRef(stableJson({ evalScript, evalScriptBlocks, niceScript }));
   const lastTestcaseCount = useRef(testcaseCount);
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -84,12 +86,13 @@ export default function EvalScriptBuilder({
     const normalized = sanitizeEvalScriptState(normalizeEvalScriptState(nextState, testcaseCount), testcaseCount);
     const body = blocksToEvalBody(normalized, files);
     const full = buildFullNiceSh({ questionKey: questionKey || 'q1', evalBody: body });
-    lastSignature.current = stableJson({ evalScript: body, evalScriptBlocks: normalized });
+    lastSignature.current = stableJson({ evalScript: body, evalScriptBlocks: normalized, niceScript: full });
     setState(normalized);
     setScriptText(full);
     setScriptError('');
     setValue('evalScript', body, { shouldDirty: true });
     setValue('evalScriptBlocks', normalized, { shouldDirty: true });
+    setValue('niceScript', full, { shouldDirty: true });
   };
 
   const appendBlockToActive = (type) => {
@@ -115,26 +118,31 @@ export default function EvalScriptBuilder({
   };
 
   useEffect(() => {
-    const signature = stableJson({ evalScript, evalScriptBlocks });
+    const signature = stableJson({ evalScript, evalScriptBlocks, niceScript });
     if (signature === lastSignature.current) return;
     lastSignature.current = signature;
-    const nextState = evalScriptBlocks && typeof evalScriptBlocks === 'object'
+    const nextState = niceScript
+      ? evalBodyToBlocks(extractEvalBodyFromNiceSh(niceScript) || niceScript, testcaseCount)
+      : evalScriptBlocks && typeof evalScriptBlocks === 'object'
       ? normalizeEvalScriptState(evalScriptBlocks, testcaseCount)
       : evalBodyToBlocks(evalScript, testcaseCount);
     setState(nextState);
-    setScriptText(buildFullNiceSh({ questionKey: questionKey || 'q1', evalBody: blocksToEvalBody(nextState, files) }));
-  }, [evalScript, evalScriptBlocks, testcaseCount, questionKey, files]);
+    setScriptText(niceScript || buildFullNiceSh({ questionKey: questionKey || 'q1', evalBody: blocksToEvalBody(nextState, files) }));
+  }, [evalScript, evalScriptBlocks, niceScript, testcaseCount, questionKey, files]);
 
   useEffect(() => {
     if (!scriptText) {
-      setScriptText(buildFullNiceSh({ questionKey: questionKey || 'q1', evalBody: blocksToEvalBody(state, files) }));
+      setScriptText(niceScript || buildFullNiceSh({ questionKey: questionKey || 'q1', evalBody: blocksToEvalBody(state, files) }));
     }
   }, []);
 
   useEffect(() => {
     if (lastTestcaseCount.current === testcaseCount) return;
     lastTestcaseCount.current = testcaseCount;
-    publish(syncTestcaseSectionCount(stateRef.current, testcaseCount));
+    // A testcase-file edit must never rewrite an independently authored
+    // nice.sh.  Keep the visual sections aligned for editing, but only write
+    // a new script when the teacher intentionally changes a flow block.
+    setState(syncTestcaseSectionCount(stateRef.current, testcaseCount));
   }, [testcaseCount]);
 
   const paletteByCategory = useMemo(() => {
@@ -157,17 +165,21 @@ export default function EvalScriptBuilder({
 
       {tab === 'script' ? (
         <div className="p-4">
-          <p className="text-sm text-gray-600 mb-3">Full script with boilerplate. Edit between <code className="text-xs bg-gray-100 px-1 rounded">EVAL_FLOW_START</code> and <code className="text-xs bg-gray-100 px-1 rounded">EVAL_FLOW_END</code>.</p>
+          <p className="text-sm text-gray-600 mb-3">This is the complete saved file. Manual changes are authoritative; the flow view is a best-effort interpretation of the script.</p>
           <Editor height="420px" language="shell" value={scriptText} onChange={(v) => { setScriptText(v ?? ''); setScriptError(''); }} options={{ minimap: { enabled: false }, fontSize: 13, wordWrap: 'on' }} />
           {scriptError && <p className="text-sm text-red-600 mt-2">{scriptError}</p>}
           <button type="button" onClick={() => {
             try {
               const body = extractEvalBodyFromNiceSh(scriptText);
-              if (!body && scriptText.trim().startsWith('#!/bin/bash')) {
-                setScriptError('Edit only the flow section between markers.');
-                return;
-              }
-              publish(evalBodyToBlocks(body || scriptText, testcaseCount));
+              const nextState = evalBodyToBlocks(body || scriptText, testcaseCount);
+              // Never regenerate a manually authored script here.  Persist the
+              // exact content and let blocks be a derived, editable view.
+              lastSignature.current = stableJson({ evalScript: body || scriptText, evalScriptBlocks: nextState, niceScript: scriptText });
+              setValue('niceScript', scriptText, { shouldDirty: true });
+              setValue('evalScript', body || scriptText, { shouldDirty: true });
+              setValue('evalScriptBlocks', nextState, { shouldDirty: true });
+              setState(nextState);
+              setScriptError('');
               setTab('blocks');
             } catch (error) {
               setScriptError(error.message);
@@ -179,7 +191,7 @@ export default function EvalScriptBuilder({
           <datalist id="eval-alias-list">{aliasOptions.map((opt) => <option key={opt.value} value={opt.value} />)}</datalist>
 
           <aside className="space-y-2 max-h-[70vh] overflow-y-auto">
-            <p className="text-[11px] text-gray-500">Click or drag into a test case script. Port-timeout scripts are auto-added in nice.sh.</p>
+            <p className="text-[11px] text-gray-500">Click or drag into a test case script. Editing blocks regenerates nice.sh; direct script edits remain unchanged.</p>
             {paletteByCategory.map(([category, entries]) => (
               <div key={category}>
                 <h4 className="text-[10px] font-bold text-gray-400 uppercase mb-1">{category}</h4>
@@ -478,7 +490,15 @@ function InlineFields({ block, onPatch, fileRefOptions, portOptions }) {
         </select>
       );
     case 'custom_bash':
-      return <input value={block.line} onChange={(e) => onPatch({ line: e.target.value })} className="eval-scratch-input" style={{ maxWidth: 220 }} onMouseDown={stop} />;
+      return <textarea
+        value={block.line}
+        onChange={(e) => onPatch({ line: e.target.value })}
+        className="eval-scratch-input font-mono"
+        style={{ minWidth: 260, minHeight: 64, maxWidth: 520, resize: 'vertical' }}
+        placeholder={'Any bash command(s), e.g.\necho "starting"\nexport FLAG=1'}
+        aria-label="Custom bash commands"
+        onMouseDown={stop}
+      />;
     case 'end_persistent':
       return <>
         <select value={block.mode} onChange={(e) => onPatch({ mode: e.target.value })} className="eval-scratch-input" onMouseDown={stop}><option value="persistent">persistent</option><option value="non-persistent">non-persistent</option></select>

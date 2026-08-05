@@ -34,7 +34,7 @@ export function parseEscapeSequence(value, index) {
     case 'f': return { length: 2, text: '\f', label: '<\\f>' };
     case 'v': return { length: 2, text: '\v', label: '<\\v>' };
     case "'": return { length: 2, text: "'", label: "<'\\'>" };
-    case '"': return { length: 2, text: '"', label: '<\\\">' };
+    case '"': return { length: 2, text: '"', label: '<\\">' };
     case '?': return { length: 2, text: '?', label: '<\\?>' };
     case '\\': return { length: 2, text: '\\', label: '\\' };
     case '0': {
@@ -201,8 +201,12 @@ export function serializeBuilderCases(cases) {
 }
 
 export function byteOffsetAt(text, characterOffset) {
-  // Text skip selection is ASCII-only, so character and byte offsets match.
-  return String(text).slice(0, characterOffset).length;
+  // The textarea contains escape notation (for example, "\\n"), while the
+  // evaluator sees the decoded byte stream.  A source-character offset is
+  // therefore not necessarily a byte offset: "\\n" occupies two editor
+  // characters but produces one byte.  Convert the selected prefix first.
+  const decoded = parseEscapedPayloadText(String(text).slice(0, characterOffset));
+  return asciiBytes(decoded).length;
 }
 
 const createBuilderId = () => globalThis.crypto?.randomUUID?.() ?? uuidv4();

@@ -221,6 +221,8 @@ const QuestionForm = ({
           <FormLabel>Testcase builder</FormLabel>
           <TestcaseBuilder
             testcases={watchedValues.testcases}
+            testcasesFile={watchedValues.testcasesFile}
+            questionKey={watchedValues.questionKey}
             socketConfig={watchedValues.testcaseSocketConfig}
             setValue={setValue}
           />
@@ -234,10 +236,11 @@ const QuestionForm = ({
             {' '}
             <code className="text-xs bg-gray-100 px-1 rounded">evalScript</code>
             {' '}
-            is the flow body only; the full nice.sh boilerplate is added at run time.
+            is the full saved <code className="text-xs bg-gray-100 px-1 rounded">nice.sh</code>. The backend uploads it unchanged at run time.
           </p>
           <EvalScriptBuilder
             evalScript={watchedValues.evalScript}
+            niceScript={watchedValues.niceScript}
             evalScriptBlocks={watchedValues.evalScriptBlocks}
             questionKey={watchedValues.questionKey || 'q1'}
             files={files}
@@ -267,9 +270,11 @@ const QuestionForm = ({
                   maxMarks: data.maxMarks || 15,
                   files: normalizeFiles(data.files || []),
                   testcases: data.testcases || {},
+                  testcasesFile: data.testcasesFile || JSON.stringify({ [data.questionKey || 'q1']: data.testcases || {} }, null, 2),
                   testcaseSocketConfig: data.testcaseSocketConfig || { clients: 1, servers: 1 },
                   input: data.input || '',
                   evalScript: data.evalScript || data.evalscripts?.['nice.sh'] || defaultSampleEvalScript,
+                  niceScript: data.niceScript || data.evalscripts?.['nice.sh'] || '',
                   evalScriptBlocks: data.evalScriptBlocks ?? null,
                 });
               } catch (err) {
